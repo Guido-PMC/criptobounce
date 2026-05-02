@@ -52,3 +52,4 @@ pnpm bot:dev
 - Plan completo: ver chat history o `.cursor/plans/`
 - Runbook operativo: [docs/RUNBOOK.md](docs/RUNBOOK.md) (creado en Fase 9)
 # criptobounce
+# criptobounce
