@@ -1,0 +1,30 @@
+{
+  "name": "robobounce2",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @rb/db generate",
+    "db:migrate": "pnpm --filter @rb/db migrate",
+    "db:push": "pnpm --filter @rb/db push",
+    "db:studio": "pnpm --filter @rb/db studio",
+    "db:seed": "pnpm --filter @rb/db seed",
+    "web:dev": "pnpm --filter @rb/web dev",
+    "worker:dev": "pnpm --filter @rb/worker dev",
+    "bot:dev": "pnpm --filter @rb/bot dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.3"
+  }
+}

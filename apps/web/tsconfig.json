@@ -1,0 +1,35 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "jsx": "preserve",
+    "allowJs": true,
+    "incremental": true,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"],
+      "@rb/db": ["../../packages/db/src"],
+      "@rb/db/*": ["../../packages/db/src/*"],
+      "@rb/mex-client": ["../../packages/mex-client/src"],
+      "@rb/mex-client/*": ["../../packages/mex-client/src/*"],
+      "@rb/crypto": ["../../packages/crypto/src"],
+      "@rb/crypto/*": ["../../packages/crypto/src/*"],
+      "@rb/domain": ["../../packages/domain/src"],
+      "@rb/domain/*": ["../../packages/domain/src/*"],
+      "@rb/config": ["../../packages/config/src"],
+      "@rb/config/*": ["../../packages/config/src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next", "dist"]
+}

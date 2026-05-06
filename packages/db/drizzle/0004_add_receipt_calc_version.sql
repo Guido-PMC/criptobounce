@@ -1,0 +1,1 @@
+ALTER TABLE "bounce_jobs" ADD COLUMN "receipt_calc_version" smallint;

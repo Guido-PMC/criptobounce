@@ -1,0 +1,22 @@
+# Railway monorepo configuration.
+# Each service uses a different start command + root directory hint.
+# Configure each in Railway UI: select repo, set "Service config -> Root Directory"
+# and "Custom Start Command" per the table below.
+#
+# | Service | Root | Build | Start |
+# | web     | apps/web    | pnpm install --frozen-lockfile && pnpm --filter @rb/web build | pnpm --filter @rb/web start |
+# | worker  | apps/worker | pnpm install --frozen-lockfile && pnpm --filter @rb/worker build | pnpm --filter @rb/worker start |
+# | bot     | apps/bot    | pnpm install --frozen-lockfile && pnpm --filter @rb/bot build | pnpm --filter @rb/bot start |
+#
+# Worker + Bot need IP estatica activada (Pro plan).
+# Web exposes PORT (Railway sets it). Worker + Bot are headless.
+#
+# Postgres provisioned in the same project; DATABASE_URL is shared via Railway's reference.
+
+[build]
+builder = "NIXPACKS"
+nixpacksConfigPath = "nixpacks.toml"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
