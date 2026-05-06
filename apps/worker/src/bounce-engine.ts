@@ -2,7 +2,7 @@ import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '@rb/db';
 import type { WorkerEnv } from '@rb/config';
 import { bounceJobs, deposits, mexAccounts, users, withdrawals, type BounceJob } from '@rb/db';
-import { calculateBounce, conversionClientOrderId, type Network } from '@rb/domain';
+import { calculateBounce, conversionClientOrderId, type Asset, type Network } from '@rb/domain';
 import { MexBusinessError } from '@rb/mex-client';
 import { logger } from './logger';
 import { isMaintenanceActive } from './maintenance';
@@ -289,7 +289,7 @@ async function handlePending(
     platform: platformComm,
     networkFeeEstimated: netFee,
     minOutput: minOut,
-    asset: dep.asset as 'USDT' | 'BTC' | 'ETH',
+    asset: dep.asset as Asset,
   });
 
   await trace(db, 'info', 'calculated_amounts', 'commissions computed', {
@@ -937,7 +937,7 @@ async function handleAwaitingConversion(
     platform: platformComm,
     networkFeeEstimated: netFee,
     minOutput: minOut,
-    asset: w.asset as 'USDT' | 'BTC' | 'ETH',
+    asset: w.asset as Asset,
   });
 
   if (!calc.isAboveMinimum) {
@@ -996,7 +996,7 @@ async function transitionToWithdrawing(
     platform: platformComm,
     networkFeeEstimated: netFee,
     minOutput: minOut,
-    asset: dep.asset as 'USDT' | 'BTC' | 'ETH',
+    asset: dep.asset as Asset,
   });
   if (!calc.isAboveMinimum) {
     await markFailed(db, job, 'below minimum');

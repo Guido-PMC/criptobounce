@@ -16,6 +16,7 @@ const FALLBACK: NetworkFeesValue = {
   'USDT-POLYGON': 0.5,
   'USDT-ARBITRUM': 1,
   'USDT-SOL': 1,
+  'USDC-ERC20': 8,
   'BTC-BTC': 0.0005,
   'ETH-ERC20': 0.005,
 };

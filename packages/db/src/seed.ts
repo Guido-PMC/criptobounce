@@ -20,7 +20,7 @@ async function main() {
       },
       {
         key: 'minimum_amounts',
-        value: { USDT: 5, BTC: 0.0005, ETH: 0.01 },
+        value: { USDT: 5, USDC: 5, BTC: 0.0005, ETH: 0.01 },
       },
       {
         key: 'network_fees',
@@ -31,6 +31,7 @@ async function main() {
           'USDT-POLYGON': 0.5,
           'USDT-ARBITRUM': 1,
           'USDT-SOL': 1,
+          'USDC-ERC20': 8,
           'BTC-BTC': 0.0005,
           'ETH-ERC20': 0.005,
         },
@@ -48,6 +49,7 @@ async function main() {
     .values([
       { asset: '*', percent: '0.005', fixedAmount: '0.3' },
       { asset: 'USDT', percent: '0.005', fixedAmount: '0.3' },
+      { asset: 'USDC', percent: '0.005', fixedAmount: '0.3' },
       { asset: 'BTC', percent: '0.005', fixedAmount: '0' },
       { asset: 'ETH', percent: '0.005', fixedAmount: '0' },
     ])
