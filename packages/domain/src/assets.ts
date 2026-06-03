@@ -1,4 +1,4 @@
-export const ASSETS = ['USDT', 'USDC', 'BTC', 'ETH'] as const;
+export const ASSETS = ['USDT', 'USDC', 'BTC', 'ETH', 'TRX'] as const;
 export type Asset = (typeof ASSETS)[number];
 
 export const NETWORKS = ['TRC20', 'ERC20', 'BSC', 'POLYGON', 'ARBITRUM', 'SOL', 'BTC'] as const;
@@ -19,6 +19,7 @@ export const SUPPORTED_PAIRS: AssetNetwork[] = [
   { asset: 'USDC', network: 'ERC20' },
   { asset: 'BTC', network: 'BTC' },
   { asset: 'ETH', network: 'ERC20' },
+  { asset: 'TRX', network: 'TRC20' },
 ];
 
 export function isSupported(asset: string, network: string): boolean {

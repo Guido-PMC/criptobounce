@@ -20,7 +20,7 @@ async function main() {
       },
       {
         key: 'minimum_amounts',
-        value: { USDT: 5, USDC: 5, BTC: 0.0005, ETH: 0.01 },
+        value: { USDT: 5, USDC: 5, BTC: 0.0005, ETH: 0.01, TRX: 10 },
       },
       {
         key: 'network_fees',
@@ -34,6 +34,7 @@ async function main() {
           'USDC-ERC20': 8,
           'BTC-BTC': 0.0005,
           'ETH-ERC20': 0.005,
+          'TRX-TRC20': 1,
         },
       },
       {
@@ -52,6 +53,7 @@ async function main() {
       { asset: 'USDC', percent: '0.005', fixedAmount: '0.3' },
       { asset: 'BTC', percent: '0.005', fixedAmount: '0' },
       { asset: 'ETH', percent: '0.005', fixedAmount: '0' },
+      { asset: 'TRX', percent: '0.005', fixedAmount: '0' },
     ])
     .onConflictDoNothing();
 

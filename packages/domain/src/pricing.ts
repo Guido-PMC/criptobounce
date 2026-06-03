@@ -62,4 +62,4 @@ export function usdtSpotSymbol(asset: Asset | string): string | null {
  * Default ordered list of assets we display prices for. Skips USDT (which
  * has no meaningful self-quoted price).
  */
-export const PRICEABLE_ASSETS: Asset[] = ['BTC', 'ETH'];
+export const PRICEABLE_ASSETS: Asset[] = ['BTC', 'ETH', 'TRX'];

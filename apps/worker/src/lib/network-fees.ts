@@ -19,6 +19,7 @@ const FALLBACK: NetworkFeesValue = {
   'USDC-ERC20': 8,
   'BTC-BTC': 0.0005,
   'ETH-ERC20': 0.005,
+  'TRX-TRC20': 1,
 };
 
 /**
