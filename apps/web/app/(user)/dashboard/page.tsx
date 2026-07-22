@@ -99,7 +99,7 @@ export default async function DashboardPage() {
         </StatCard>
       </div>
 
-      <PricesCard />
+      <PricesCard isAdmin={session!.user.role === 'admin'} />
 
       <Card>
         <CardHeader>

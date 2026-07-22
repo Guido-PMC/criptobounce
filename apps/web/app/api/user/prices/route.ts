@@ -44,10 +44,19 @@ export async function GET() {
     );
   }
 
+  const isAdmin = session.user.role === 'admin';
+
   const items: PriceItem[] = [];
   for (const t of tickers) {
     const asset = assetForSymbol.get(t.symbol);
     if (!asset) continue;
+
+    if (isAdmin) {
+      // Raw MEX quote — admin dashboard applies optional preview markup client-side.
+      items.push({ asset, symbol: t.symbol, compra: t.ask, venta: t.bid });
+      continue;
+    }
+
     const [user, platform] = await Promise.all([
       getUserCommission(db, userId, asset),
       getPlatformCommission(db, asset),
@@ -64,6 +73,7 @@ export async function GET() {
     {
       ts: new Date().toISOString(),
       items,
+      adminPreview: isAdmin,
     },
     {
       headers: {

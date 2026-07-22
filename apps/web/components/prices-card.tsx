@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { applyCommissionToQuote } from '@rb/domain';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
 import {
   Table,
   TableBody,
@@ -23,9 +25,13 @@ interface PriceItem {
 interface PricesResponse {
   ts: string;
   items: PriceItem[];
+  adminPreview?: boolean;
 }
 
 const REFRESH_MS = 60_000;
+const ADMIN_MARKUP_MAX_PCT = 20;
+const ADMIN_MARKUP_STEP_PCT = 0.1;
+const ZERO_COMMISSION = { percent: 0, fixed: 0 };
 
 function formatTime(iso: string): string {
   try {
@@ -47,10 +53,15 @@ function priceDecimals(asset: string): number {
   return 4;
 }
 
-export function PricesCard() {
+interface PricesCardProps {
+  isAdmin?: boolean;
+}
+
+export function PricesCard({ isAdmin = false }: PricesCardProps) {
   const [data, setData] = useState<PricesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [markupPct, setMarkupPct] = useState(0);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -85,6 +96,20 @@ export function PricesCard() {
     };
   }, [load]);
 
+  const displayItems = useMemo(() => {
+    if (!data) return [];
+    if (!isAdmin || markupPct <= 0) return data.items;
+    const fraction = markupPct / 100;
+    return data.items.map((item) => {
+      const { compra, venta } = applyCommissionToQuote(
+        { bid: item.venta, ask: item.compra },
+        { percent: fraction, fixed: 0 },
+        ZERO_COMMISSION,
+      );
+      return { ...item, compra, venta };
+    });
+  }, [data, isAdmin, markupPct]);
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -95,6 +120,7 @@ export function PricesCard() {
               <>
                 <span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_4px_1px_rgb(16_185_129_/_0.6)] animate-pulse" />
                 Actualizado {formatTime(data.ts)} - auto cada 60s
+                {isAdmin ? ' · precio MEX sin markup' : ''}
               </>
             ) : (
               'Cargando precios...'
@@ -112,12 +138,44 @@ export function PricesCard() {
           {loading ? 'Actualizando...' : 'Refrescar'}
         </Button>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {isAdmin ? (
+          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label>Simular markup</Label>
+                <p className="text-xs text-muted-foreground">
+                  Arrastrá para ver cómo quedarían los precios con comisión
+                  aplicada. No se guarda ni afecta a otros usuarios.
+                </p>
+              </div>
+              <div className="text-xl font-semibold tabular-nums shrink-0">
+                {markupPct.toFixed(1)}%
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={ADMIN_MARKUP_MAX_PCT}
+              step={ADMIN_MARKUP_STEP_PCT}
+              value={markupPct}
+              onChange={(e) => {
+                setMarkupPct(Number(e.target.value));
+              }}
+              className="w-full accent-primary"
+              aria-label="Simular markup"
+            />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>0%</span>
+              <span>{ADMIN_MARKUP_MAX_PCT}%</span>
+            </div>
+          </div>
+        ) : null}
         {error ? (
           <p className="text-sm text-destructive">
             No se pudieron obtener los precios ({error}).
           </p>
-        ) : !data || data.items.length === 0 ? (
+        ) : !data || displayItems.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             Sin datos disponibles por ahora.
           </p>
@@ -131,7 +189,7 @@ export function PricesCard() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.items.map((item) => (
+              {displayItems.map((item) => (
                 <TableRow key={item.symbol}>
                   <TableCell className="font-medium">{item.asset}</TableCell>
                   <TableCell className="text-right">
