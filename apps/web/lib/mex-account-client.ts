@@ -11,6 +11,7 @@ export function buildWebMexClient(mex: MexAccount): MexClient {
     apiKey: decryptString(mex.apiKeyEnc, masterKey),
     apiSecret: decryptString(mex.apiSecretEnc, masterKey),
     host: process.env.MEX_HOST,
+    recvWindow: 60_000,
     requestTimeoutMs: 10_000,
   });
 }

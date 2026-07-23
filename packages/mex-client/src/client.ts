@@ -290,7 +290,8 @@ export class MexClient {
     }
 
     const ts = Date.now();
-    const { query } = signV3(this.apiSecret, params, ts);
+    const signedParams = { ...params, recvWindow: this.recvWindow };
+    const { query } = signV3(this.apiSecret, signedParams, ts);
     const url = `${this.host}${endpoint}?${query}`;
     const headers: Record<string, string> = {
       'X-MEXC-APIKEY': this.apiKey,
