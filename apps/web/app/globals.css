@@ -62,7 +62,7 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    font-feature-settings: "cv11", "ss01", "ss03";
   }
   /* Default focus rings are too harsh; soften and animate. */
   :focus-visible {
@@ -90,12 +90,27 @@
   .nav-link:hover {
     @apply text-foreground bg-accent/70;
   }
-  .nav-link[data-active='true'] {
+  .nav-link[data-active="true"] {
     @apply text-foreground bg-accent shadow-sm font-medium;
   }
-  .nav-link[data-active='true']::before {
-    content: '';
+  .nav-link[data-active="true"]::before {
+    content: "";
     @apply absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-foreground;
+  }
+
+  /* Admin navigation uses a dark operations-console treatment so the
+     privileged context is unmistakable from the regular user area. */
+  .admin-sidebar .nav-link {
+    @apply text-slate-400;
+  }
+  .admin-sidebar .nav-link:hover {
+    @apply bg-slate-800 text-slate-100;
+  }
+  .admin-sidebar .nav-link[data-active="true"] {
+    @apply bg-slate-800 text-white shadow-none;
+  }
+  .admin-sidebar .nav-link[data-active="true"]::before {
+    @apply bg-amber-400;
   }
 
   /* Inline link inside body copy: animated underline. */
@@ -113,7 +128,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -138,7 +155,8 @@
     padding: 0 !important;
   }
   /* Avoid awkward page-breaks inside the receipt body. */
-  .print-area, .print-area * {
+  .print-area,
+  .print-area * {
     break-inside: avoid;
   }
 }

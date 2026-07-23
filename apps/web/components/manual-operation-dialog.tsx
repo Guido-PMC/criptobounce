@@ -1,5 +1,9 @@
 'use client';
 
+import {
+  type ManualActionState,
+  createManualOperationAction,
+} from '@/app/(admin)/admin/manual-operations/actions';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -15,12 +19,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { ASSETS, SUPPORTED_PAIRS } from '@rb/domain';
 import Link from 'next/link';
 import { useActionState, useMemo, useState } from 'react';
-import {
-  type ManualActionState,
-  createManualOperationAction,
-} from '../../manual-operations/actions';
 
-interface WalletOption {
+export interface ManualOperationWalletOption {
   id: string;
   label: string;
   asset: string;
@@ -36,15 +36,19 @@ export function ManualOperationDialog({
   userId,
   wallets,
   disabled,
+  successHref,
+  triggerLabel = 'Operación manual',
 }: {
   userId: string;
-  wallets: WalletOption[];
+  wallets: ManualOperationWalletOption[];
   disabled?: boolean;
+  successHref?: string;
+  triggerLabel?: string;
 }) {
   const [fromAsset, setFromAsset] = useState('USDT');
   const [toAsset, setToAsset] = useState('BTC');
-  const fromNetworks = SUPPORTED_PAIRS.filter((p) => p.asset === fromAsset);
-  const toNetworks = SUPPORTED_PAIRS.filter((p) => p.asset === toAsset);
+  const fromNetworks = SUPPORTED_PAIRS.filter((pair) => pair.asset === fromAsset);
+  const toNetworks = SUPPORTED_PAIRS.filter((pair) => pair.asset === toAsset);
   const [fromNetwork, setFromNetwork] = useState(fromNetworks[0]?.network ?? '');
   const [toNetwork, setToNetwork] = useState(toNetworks[0]?.network ?? '');
   const payoutWallets = useMemo(
@@ -61,7 +65,7 @@ export function ManualOperationDialog({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button disabled={disabled}>Operación manual</Button>
+        <Button disabled={disabled}>{triggerLabel}</Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
@@ -76,7 +80,11 @@ export function ManualOperationDialog({
             Operación creada.{' '}
             <Link
               className="font-medium underline"
-              href={`/admin/manual-operations/${state.operationId}`}
+              href={
+                successHref
+                  ? `${successHref}?created=${state.operationId}`
+                  : `/admin/manual-operations/${state.operationId}`
+              }
             >
               Ver monto exacto e instrucciones
             </Link>
@@ -91,7 +99,9 @@ export function ManualOperationDialog({
                 onChange={(event) => {
                   const asset = event.target.value;
                   setFromAsset(asset);
-                  setFromNetwork(SUPPORTED_PAIRS.find((p) => p.asset === asset)?.network ?? '');
+                  setFromNetwork(
+                    SUPPORTED_PAIRS.find((pair) => pair.asset === asset)?.network ?? '',
+                  );
                 }}
               >
                 {ASSETS.map((asset) => (
@@ -123,7 +133,7 @@ export function ManualOperationDialog({
                 onChange={(event) => {
                   const asset = event.target.value;
                   setToAsset(asset);
-                  setToNetwork(SUPPORTED_PAIRS.find((p) => p.asset === asset)?.network ?? '');
+                  setToNetwork(SUPPORTED_PAIRS.find((pair) => pair.asset === asset)?.network ?? '');
                 }}
               >
                 {ASSETS.map((asset) => (

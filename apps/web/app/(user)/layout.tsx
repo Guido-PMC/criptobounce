@@ -19,7 +19,12 @@ export default async function UserLayout({ children }: { children: React.ReactNo
           <div className="h-7 w-7 rounded-md bg-foreground text-background grid place-items-center text-xs font-bold tracking-tight">
             R
           </div>
-          <div className="font-semibold text-sm tracking-tight">Robobounce</div>
+          <div>
+            <div className="font-semibold text-sm tracking-tight leading-none">Robobounce</div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+              vista usuario
+            </div>
+          </div>
         </div>
 
         <NavLink href="/dashboard" label="Dashboard" />
@@ -33,9 +38,9 @@ export default async function UserLayout({ children }: { children: React.ReactNo
         {session.user.role === 'admin' ? (
           <Link
             href="/admin"
-            className="block mt-4 px-3 py-1.5 rounded-md text-sm border border-border/70 bg-secondary/60 hover:bg-secondary transition-colors duration-150"
+            className="block mt-4 rounded-md border border-amber-500/40 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-900 transition-colors duration-150 hover:bg-amber-100"
           >
-            Ir al panel admin
+            Abrir consola administrativa
           </Link>
         ) : null}
 

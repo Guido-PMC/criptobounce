@@ -1,4 +1,5 @@
 import { auth } from '@/auth';
+import { ManualOperationDialog } from '@/components/manual-operation-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -9,12 +10,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireRevalidatedAdmin } from '@/lib/admin-security';
 import { db } from '@/lib/db';
 import { ACTIVE_MANUAL_OPERATION_STATES } from '@/lib/user-manual-operations';
 import { formatDate } from '@/lib/utils';
-import { manualOperations, mexDepositAddresses, withdrawals } from '@rb/db';
+import {
+  destinationWallets,
+  manualOperations,
+  mexAccounts,
+  mexDepositAddresses,
+  withdrawals,
+} from '@rb/db';
 import { type Network, explorerTxUrl } from '@rb/domain';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { ConfirmOperationButton } from './confirm-operation-button';
 
 export const dynamic = 'force-dynamic';
@@ -48,17 +56,20 @@ function stateVariant(state: string): 'success' | 'warning' | 'destructive' | 's
 export default async function OperationsPage() {
   const session = await auth();
   const userId = session!.user.id;
-  const operations = await db
-    .select()
-    .from(manualOperations)
-    .where(eq(manualOperations.userId, userId))
-    .orderBy(desc(manualOperations.createdAt))
-    .limit(100);
+  const [admin, operations] = await Promise.all([
+    requireRevalidatedAdmin().catch(() => null),
+    db
+      .select()
+      .from(manualOperations)
+      .where(eq(manualOperations.userId, userId))
+      .orderBy(desc(manualOperations.createdAt))
+      .limit(100),
+  ]);
 
   const active = operations.find((operation) =>
     (ACTIVE_MANUAL_OPERATION_STATES as readonly string[]).includes(operation.state),
   );
-  const [depositAddress, operationWithdrawals] = await Promise.all([
+  const [depositAddress, operationWithdrawals, adminMexAccount, adminWallets] = await Promise.all([
     active
       ? db.query.mexDepositAddresses.findFirst({
           where: and(
@@ -84,6 +95,23 @@ export default async function OperationsPage() {
           )
           .orderBy(desc(withdrawals.createdAt))
       : Promise.resolve([]),
+    admin
+      ? db.query.mexAccounts.findFirst({
+          where: and(eq(mexAccounts.userId, userId), eq(mexAccounts.status, 'active')),
+        })
+      : Promise.resolve(undefined),
+    admin
+      ? db
+          .select({
+            id: destinationWallets.id,
+            label: destinationWallets.label,
+            asset: destinationWallets.asset,
+            network: destinationWallets.network,
+            address: destinationWallets.address,
+          })
+          .from(destinationWallets)
+          .where(and(eq(destinationWallets.userId, userId), isNull(destinationWallets.deletedAt)))
+      : Promise.resolve([]),
   ]);
   const withdrawalsByOperation = new Map<string, typeof operationWithdrawals>();
   for (const withdrawal of operationWithdrawals) {
@@ -101,6 +129,39 @@ export default async function OperationsPage() {
           Seguimiento de depósitos, conversiones y retiros coordinados con el equipo.
         </p>
       </div>
+
+      {admin ? (
+        <Card className="overflow-hidden border-amber-500/40 bg-amber-50/50 shadow-sm">
+          <div className="h-1 bg-amber-500" />
+          <CardContent className="flex flex-col gap-4 pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+                Herramienta de administrador
+              </div>
+              <h2 className="font-semibold text-slate-950">Crear una operación para tu cuenta</h2>
+              <p className="mt-1 max-w-2xl text-sm text-slate-600">
+                Esta acción sólo aparece para administradores y requiere tu código TOTP.
+              </p>
+              {active ? (
+                <p className="mt-2 text-xs font-medium text-amber-800">
+                  Ya tenés una operación activa. Debe finalizar antes de crear otra.
+                </p>
+              ) : !adminMexAccount ? (
+                <p className="mt-2 text-xs font-medium text-amber-800">
+                  La cuenta MEX debe estar activa para crear una operación.
+                </p>
+              ) : null}
+            </div>
+            <ManualOperationDialog
+              userId={userId}
+              wallets={adminWallets}
+              disabled={Boolean(active) || !adminMexAccount}
+              successHref="/operations"
+              triggerLabel="Nueva operación"
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {active ? (
         <Card className={active.state === 'pending_user_confirm' ? 'border-yellow-500/60' : ''}>

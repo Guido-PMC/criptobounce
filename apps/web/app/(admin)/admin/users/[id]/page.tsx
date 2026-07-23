@@ -1,3 +1,4 @@
+import { ManualOperationDialog } from '@/components/manual-operation-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -24,7 +25,6 @@ import { notFound } from 'next/navigation';
 import { AdminUserActions } from './admin-actions';
 import { ApproveForm } from './approve-form';
 import { CommissionEditor } from './commission-editor';
-import { ManualOperationDialog } from './manual-operation-dialog';
 
 export const dynamic = 'force-dynamic';
 

@@ -20,16 +20,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   );
 
   return (
-    <div className="min-h-screen flex bg-background">
-      <aside className="w-60 shrink-0 border-r border-border/60 bg-card/50 backdrop-blur-sm p-4 space-y-1">
+    <div className="min-h-screen flex bg-slate-50">
+      <aside className="admin-sidebar w-60 shrink-0 border-r border-slate-800 bg-slate-950 p-4 text-slate-100 space-y-1">
         <div className="px-1.5 mb-5 flex items-center gap-2">
-          <div className="h-7 w-7 rounded-md bg-foreground text-background grid place-items-center text-xs font-bold tracking-tight">
+          <div className="h-7 w-7 rounded-md bg-amber-400 text-slate-950 grid place-items-center text-xs font-bold tracking-tight">
             R
           </div>
           <div>
             <div className="font-semibold text-sm tracking-tight leading-none">Robobounce</div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">
-              admin
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-400 mt-0.5">
+              consola admin
             </div>
           </div>
         </div>
@@ -46,12 +46,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
         <Link
           href="/dashboard"
-          className="block mt-4 px-3 py-1.5 rounded-md text-sm border border-border/70 bg-secondary/60 hover:bg-secondary transition-colors duration-150"
+          className="block mt-4 rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-sm text-amber-200 transition-colors duration-150 hover:bg-amber-400/20"
         >
-          Volver al menu de usuario
+          Cambiar a vista usuario
         </Link>
 
-        <div className="pt-4 mt-4 border-t border-border/60 text-xs text-muted-foreground break-all">
+        <div className="pt-4 mt-4 border-t border-slate-800 text-xs text-slate-400 break-all">
           {admin.email}
         </div>
         <form
@@ -60,12 +60,24 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             await signOut({ redirectTo: '/login' });
           }}
         >
-          <Button variant="outline" size="sm" type="submit" className="w-full mt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            type="submit"
+            className="w-full mt-2 border-slate-700 bg-transparent text-slate-200 hover:bg-slate-800 hover:text-white"
+          >
             Salir
           </Button>
         </form>
       </aside>
       <main className="flex-1 p-6 overflow-auto animate-fade-in">
+        <div className="-mx-6 -mt-6 mb-6 flex items-center justify-between border-b border-amber-300/60 bg-amber-50 px-6 py-2 text-xs text-amber-950">
+          <span className="flex items-center gap-2 font-medium">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            Configuración administrativa
+          </span>
+          <span className="text-amber-800">Los cambios pueden afectar a todos los usuarios</span>
+        </div>
         <Admin2FAReminder />
         {pendingManualCount > 0 ? (
           <Link
