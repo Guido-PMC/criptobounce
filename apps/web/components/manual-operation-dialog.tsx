@@ -291,18 +291,6 @@ export function ManualOperationDialog({
                 <Textarea name="internalNotes" maxLength={2000} />
               </Field>
             </div>
-            <div className="sm:col-span-2">
-              <Field label="Código TOTP">
-                <Input
-                  name="totpCode"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  required
-                />
-              </Field>
-            </div>
             {state.error ? (
               <p className="sm:col-span-2 text-sm text-destructive">{state.error}</p>
             ) : null}

@@ -1,7 +1,11 @@
 'use server';
 
 import { randomInt } from 'node:crypto';
-import { type RevalidatedAdmin, requireAdminTotp } from '@/lib/admin-security';
+import {
+  type RevalidatedAdmin,
+  requireAdminTotp,
+  requireRevalidatedAdmin,
+} from '@/lib/admin-security';
 import { db } from '@/lib/db';
 import { buildWebMexClient } from '@/lib/mex-account-client';
 import {
@@ -428,7 +432,7 @@ export async function createManualOperationAction(
   formData: FormData,
 ): Promise<ManualActionState> {
   try {
-    const admin = await requireAdminTotp(formString(formData, 'totpCode'));
+    const admin = await requireRevalidatedAdmin();
     const input = createSchema.parse({
       fromAsset: formString(formData, 'fromAsset'),
       fromNetwork: formString(formData, 'fromNetwork'),
