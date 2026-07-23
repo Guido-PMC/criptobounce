@@ -221,7 +221,7 @@ export function ManualOperationDialog({
                     key={`${network.mexCoin}:${network.mexNetwork}`}
                     value={JSON.stringify([network.mexCoin, network.mexNetwork])}
                   >
-                    {network.name} · fee {network.withdrawFee} · mínimo {network.withdrawMin}
+                    {network.mexNetwork} · fee {network.withdrawFee} · mínimo {network.withdrawMin}
                     {network.memoRequired ? ' · requiere memo/tag' : ''}
                   </option>
                 ))}
