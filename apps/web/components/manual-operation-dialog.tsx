@@ -33,6 +33,20 @@ const initialState: ManualActionState = { ok: false };
 const selectClass =
   'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm';
 
+interface ManualQuotePreview {
+  verifierDigits: string;
+  exactDepositAmount: string;
+  nominalAmount: string;
+  estimatedOutput: string;
+  price: string;
+  symbol: string | null;
+  side: 'BUY' | 'SELL' | null;
+  withdrawFee: string;
+  userCommission: { percent: number; fixed: number };
+  platformCommission: { percent: number; fixed: number };
+  quotedAt: string;
+}
+
 export function ManualOperationDialog({
   userId,
   wallets,
@@ -55,6 +69,13 @@ export function ManualOperationDialog({
   const [payoutAddress, setPayoutAddress] = useState('');
   const [payoutMemo, setPayoutMemo] = useState('');
   const [payoutConfirmed, setPayoutConfirmed] = useState(false);
+  const [amountMode, setAmountMode] = useState<'input' | 'output'>('input');
+  const [inputAmount, setInputAmount] = useState('100');
+  const [outputAmount, setOutputAmount] = useState('');
+  const [quote, setQuote] = useState<ManualQuotePreview | null>(null);
+  const [quoteError, setQuoteError] = useState<string>();
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteRefresh, setQuoteRefresh] = useState(0);
   const [catalogError, setCatalogError] = useState<string>();
   const [catalogLoading, setCatalogLoading] = useState(true);
   const refundWallets = useMemo(
@@ -64,6 +85,8 @@ export function ManualOperationDialog({
   const selectedOutput = outputAssets.find((output) => output.asset === toAsset);
   const action = createManualOperationAction.bind(null, userId);
   const [state, formAction, pending] = useActionState(action, initialState);
+  const activeAmount = amountMode === 'input' ? inputAmount : outputAmount;
+  const verifierDigits = quote?.verifierDigits ?? '';
 
   useEffect(() => {
     const abort = new AbortController();
@@ -75,6 +98,8 @@ export function ManualOperationDialog({
     setPayoutAddress('');
     setPayoutMemo('');
     setPayoutConfirmed(false);
+    setQuote(null);
+    setQuoteError(undefined);
     const params = new URLSearchParams({ userId, fromAsset });
     fetch(`/api/admin/manual-operations/catalog?${params}`, {
       signal: abort.signal,
@@ -101,6 +126,70 @@ export function ManualOperationDialog({
     return () => abort.abort();
   }, [fromAsset, userId]);
 
+  useEffect(() => {
+    if (!toAsset || !payoutNetwork || !activeAmount || !/^\d+(?:\.\d+)?$/.test(activeAmount)) {
+      setQuote(null);
+      setQuoteLoading(false);
+      return;
+    }
+    const abort = new AbortController();
+    const immediateRefresh = Date.now() - quoteRefresh < 1_000;
+    const timer = window.setTimeout(
+      () => {
+        setQuoteLoading(true);
+        setQuoteError(undefined);
+        const params = new URLSearchParams({
+          userId,
+          fromAsset,
+          fromNetwork,
+          toAsset,
+          amount: activeAmount,
+          mode: amountMode,
+          withdrawFee: payoutNetwork.withdrawFee,
+        });
+        if (verifierDigits) params.set('verifierDigits', verifierDigits);
+        fetch(`/api/admin/manual-operations/quote?${params}`, {
+          signal: abort.signal,
+          cache: 'no-store',
+        })
+          .then(async (response) => {
+            const payload = (await response.json()) as ManualQuotePreview & { error?: string };
+            if (!response.ok || !payload.nominalAmount) {
+              throw new Error(payload.error ?? 'No se pudo obtener la cotización');
+            }
+            setQuote(payload);
+            setInputAmount(payload.nominalAmount);
+            if (amountMode === 'input') setOutputAmount(payload.estimatedOutput);
+          })
+          .catch((error: unknown) => {
+            if (abort.signal.aborted) return;
+            setQuote(null);
+            setQuoteError(
+              error instanceof Error ? error.message : 'No se pudo obtener la cotización',
+            );
+          })
+          .finally(() => {
+            if (!abort.signal.aborted) setQuoteLoading(false);
+          });
+      },
+      immediateRefresh ? 0 : 500,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      abort.abort();
+    };
+  }, [
+    activeAmount,
+    amountMode,
+    fromAsset,
+    fromNetwork,
+    payoutNetwork,
+    quoteRefresh,
+    toAsset,
+    userId,
+    verifierDigits,
+  ]);
+
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -110,8 +199,8 @@ export function ManualOperationDialog({
         <DialogHeader>
           <DialogTitle>Crear operación manual</DialogTitle>
           <DialogDescription>
-            El monto exacto y el estimado se calculan al confirmar. La operación vence en 15
-            minutos.
+            Ingresá cuánto querés gastar o recibir. La cotización y el monto identificador se
+            calculan antes de crear la operación.
           </DialogDescription>
         </DialogHeader>
         {state.ok && state.operationId ? (
@@ -141,6 +230,10 @@ export function ManualOperationDialog({
                   setFromNetwork(
                     SUPPORTED_PAIRS.find((pair) => pair.asset === asset)?.network ?? '',
                   );
+                  setAmountMode('input');
+                  setInputAmount('100');
+                  setOutputAmount('');
+                  setQuote(null);
                 }}
               >
                 {ASSETS.map((asset) => (
@@ -153,17 +246,16 @@ export function ManualOperationDialog({
                 className={selectClass}
                 name="fromNetwork"
                 value={fromNetwork}
-                onChange={(event) => setFromNetwork(event.target.value)}
+                onChange={(event) => {
+                  setFromNetwork(event.target.value);
+                  setQuote(null);
+                }}
               >
                 {fromNetworks.map((pair) => (
                   <option key={pair.network}>{pair.network}</option>
                 ))}
               </select>
             </Field>
-            <Field label="Monto nominal">
-              <Input name="nominalAmount" inputMode="decimal" placeholder="100" required />
-            </Field>
-            <div />
             <Field label="Activo salida">
               <select
                 className={selectClass}
@@ -178,6 +270,9 @@ export function ManualOperationDialog({
                   setPayoutAddress('');
                   setPayoutMemo('');
                   setPayoutConfirmed(false);
+                  setAmountMode('input');
+                  setOutputAmount('');
+                  setQuote(null);
                 }}
                 disabled={catalogLoading || outputAssets.length === 0}
                 required
@@ -212,6 +307,7 @@ export function ManualOperationDialog({
                   setPayoutAddress('');
                   setPayoutMemo('');
                   setPayoutConfirmed(false);
+                  setQuote(null);
                 }}
                 disabled={!selectedOutput}
                 required
@@ -230,6 +326,97 @@ export function ManualOperationDialog({
             <input type="hidden" name="toNetwork" value={payoutNetwork?.mexNetwork ?? ''} />
             <input type="hidden" name="payoutMexCoin" value={payoutNetwork?.mexCoin ?? ''} />
             <input type="hidden" name="payoutMexNetwork" value={payoutNetwork?.mexNetwork ?? ''} />
+            <Field label={`Quiero gastar (${fromAsset})`}>
+              <Input
+                inputMode="decimal"
+                placeholder="100"
+                value={inputAmount}
+                onChange={(event) => {
+                  setAmountMode('input');
+                  setInputAmount(event.target.value);
+                  setQuote(null);
+                  setQuoteError(undefined);
+                }}
+                required
+              />
+            </Field>
+            <Field label={`Quiero recibir (${toAsset || 'salida'})`}>
+              <Input
+                inputMode="decimal"
+                placeholder="0"
+                value={outputAmount}
+                onChange={(event) => {
+                  setAmountMode('output');
+                  setOutputAmount(event.target.value);
+                  setQuote(null);
+                  setQuoteError(undefined);
+                }}
+                disabled={!toAsset}
+                required
+              />
+            </Field>
+            <input type="hidden" name="nominalAmount" value={quote?.nominalAmount ?? ''} />
+            <input type="hidden" name="amountMode" value={amountMode} />
+            <input type="hidden" name="requestedAmount" value={activeAmount} />
+            <input type="hidden" name="verifierDigits" value={verifierDigits} />
+            <div className="space-y-3 rounded-md border bg-muted/30 p-3 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Cotización MEX</p>
+                  <p className="text-xs text-muted-foreground">
+                    {quote
+                      ? `Actualizada ${new Date(quote.quotedAt).toLocaleTimeString('es-AR')}`
+                      : 'Ingresá un monto para cotizar'}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={quoteLoading || !activeAmount || !payoutNetwork}
+                  onClick={() => setQuoteRefresh(Date.now())}
+                >
+                  {quoteLoading ? 'Actualizando…' : 'Actualizar cotización'}
+                </Button>
+              </div>
+              {quote ? (
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <QuoteDatum
+                    label="Precio"
+                    value={
+                      quote.side === 'BUY'
+                        ? `1 ${toAsset} = ${quote.price} ${fromAsset}`
+                        : quote.side === 'SELL'
+                          ? `1 ${fromAsset} = ${quote.price} ${toAsset}`
+                          : `1 ${fromAsset} = 1 ${toAsset}`
+                    }
+                  />
+                  <QuoteDatum
+                    label="Resultado neto estimado"
+                    value={`${quote.estimatedOutput} ${toAsset}`}
+                  />
+                  <QuoteDatum label="Monto base" value={`${quote.nominalAmount} ${fromAsset}`} />
+                  <QuoteDatum
+                    label={`Identificador ${quote.verifierDigits}`}
+                    value={`${quote.nominalAmount} + identificador = ${quote.exactDepositAmount} ${fromAsset}`}
+                  />
+                  <QuoteDatum label="Fee de retiro" value={`${quote.withdrawFee} ${toAsset}`} />
+                  <QuoteDatum
+                    label="Comisiones"
+                    value={`${(
+                      (quote.userCommission.percent + quote.platformCommission.percent) * 100
+                    ).toFixed(2)}% + ${(
+                      quote.userCommission.fixed + quote.platformCommission.fixed
+                    ).toFixed(8)} ${toAsset}`}
+                  />
+                </div>
+              ) : null}
+              {quoteError ? <p className="text-xs text-destructive">{quoteError}</p> : null}
+              <p className="text-xs text-muted-foreground">
+                El monto de salida es estimado. Al crear, el servidor vuelve a cotizar y la
+                ejecución final se realiza a mercado.
+              </p>
+            </div>
             <Field label="Dirección payout">
               <Input
                 name="payoutAddress"
@@ -297,7 +484,9 @@ export function ManualOperationDialog({
             <Button
               className="sm:col-span-2"
               type="submit"
-              disabled={pending || catalogLoading || !payoutNetwork || !toAsset}
+              disabled={
+                pending || catalogLoading || quoteLoading || !quote || !payoutNetwork || !toAsset
+              }
             >
               {pending ? 'Validando…' : 'Crear operación'}
             </Button>
@@ -313,6 +502,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="space-y-1.5">
       <Label>{label}</Label>
       {children}
+    </div>
+  );
+}
+
+function QuoteDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-mono">{value}</p>
     </div>
   );
 }

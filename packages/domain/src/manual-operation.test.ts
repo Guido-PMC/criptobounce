@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExpectedDepositAmount,
+  calculateManualEstimatedOutput,
+  calculateManualNominalForOutput,
   calculateManualSurplus,
   manualAmountsEqual,
   validateManualNominal,
@@ -29,5 +31,29 @@ describe('manual operation amounts', () => {
   it('calculates surplus and rejects over-execution', () => {
     expect(calculateManualSurplus('100.47', '100', 'USDT')).toBe('0.47');
     expect(() => calculateManualSurplus('100', '101', 'USDT')).toThrow('exceeds received');
+  });
+
+  it('links input and net output amounts for BUY quotes', () => {
+    const quote = {
+      price: '50000',
+      side: 'BUY' as const,
+      userCommission: { percent: 0.01, fixed: 0 },
+      platformCommission: { percent: 0, fixed: 0 },
+      networkFee: '0.0001',
+    };
+    expect(calculateManualEstimatedOutput('1000', quote)).toBe('0.01970000');
+    expect(calculateManualNominalForOutput('0.0197', 'USDT', quote)).toBe('1000.00');
+  });
+
+  it('rounds derived nominal amounts up before reserving verifier digits', () => {
+    const quote = {
+      price: '2000',
+      side: 'SELL' as const,
+      userCommission: { percent: 0, fixed: 0 },
+      platformCommission: { percent: 0, fixed: 0 },
+      networkFee: '1',
+    };
+    expect(calculateManualNominalForOutput('100', 'ETH', quote)).toBe('0.05050000');
+    expect(calculateManualEstimatedOutput('0.05050000', quote)).toBe('100.00000000');
   });
 });

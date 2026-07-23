@@ -552,6 +552,14 @@ Guardar en `estimated_output`; el activo ya está definido por `to_asset`. **No 
 
 La ejecución usa **market order al TC del momento**.
 
+En el formulario de creación, entrada y salida son campos vinculados. El último campo
+editado define el objetivo: si se modifica la entrada se recalcula la salida neta; si se
+modifica la salida, se calcula hacia arriba el nominal de entrada necesario. La preview
+usa bid/ask vivo, comisiones y fee de retiro, muestra su timestamp y permite actualizarla
+manualmente. Al crear, el servidor no confía en la preview: vuelve a cotizar y persiste un
+estimado nuevo. Si el último campo editado fue la salida, también recalcula hacia arriba
+el nominal necesario con esa cotización nueva para conservar la intención de compra.
+
 ### 7.4 Protección de precio y comisión real MEX
 
 - Al mostrar confirmación se obtiene una cotización nueva; el usuario/admin confirma
@@ -747,9 +755,10 @@ un segundo depósito delta sería imposible de matchear de forma confiable.
 | Usuario | pre-filled desde `[id]` | ✅ |
 | Activo entrada | select ASSETS | ✅ |
 | Red entrada | select NETWORKS filtrado | ✅ |
-| Monto nominal | number | ✅ |
 | Activo salida | select ASSETS | ✅ |
 | Red salida | select NETWORKS filtrado | ✅ |
+| Quiero gastar | number vinculado al activo de entrada | ✅ |
+| Quiero recibir | number vinculado al activo de salida | ✅ |
 | Wallet payout | select wallets del user (filtrado to_asset/to_network) | ✅ |
 | Wallet devolución | select wallets del user filtrado por from_asset/from_network | ❌ |
 | Notas internas | textarea | ❌ |
@@ -774,9 +783,12 @@ La dirección, memo y asset/network de payout/refund se copian como snapshot inm
 
 **Preview en vivo** (client component):
 
-- Verificador generado (server-side al submit; preview puede simular con placeholder)
-- Monto exacto a depositar
-- Estimado de salida (fetch `/api/admin/manual-operations/estimate` o server action)
+- Cotización bid/ask directa MEX y timestamp
+- Ambos montos editables; el último modificado recalcula el otro
+- Verificador real generado por el servidor y conservado al crear
+- Desglose `nominal + identificador = monto exacto a depositar`
+- Estimado neto, fee de retiro y comisiones
+- Botón para actualizar mediante `/api/admin/manual-operations/quote`
 - Par spot resuelto
 - Dirección de depósito MEX + memo/tag, con botón copiar
 - Validación: par existe, una op activa, wallets válidas
