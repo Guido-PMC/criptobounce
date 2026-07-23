@@ -14,18 +14,19 @@ conversión spot + retiro a la wallet de destino.
 
 Características clave:
 
-- Par seleccionable en ambas direcciones: **CRIPTO ↔ USDT / USDC** (asset + network en ambos lados).
+- Entrada seleccionable entre los activos/redes internos soportados y salida dinámica entre
+  activos con par spot directo y una red de retiro habilitada en MEXC.
 - **Dígito verificador**: código `00`–`99` agregado en una escala fija por activo,
   usando el menor incremento operativo definido para ese activo (no siempre centésimas).
 - **Timer de 15 minutos** desde la creación; al vencer expira (con botón de extender = nueva operación).
 - **Una operación activa por usuario** a la vez.
-- **Sin reglas de bounce**: wallets explícitas al crear (payout obligatoria, devolución opcional unificada).
+- **Sin reglas de bounce**: dirección payout ad-hoc obligatoria (con memo/tag cuando aplica)
+  y wallet de devolución opcional unificada.
 - **Gate anti-bounce**: mientras hay operación activa para un activo/red, no se encola bounce automático.
 - **Banner global** en todo el panel con countdown y estado.
 - **Telegram** en cada paso relevante.
-- Alcance v1: únicamente los activos y redes definidos en `ASSETS` / `SUPPORTED_PAIRS`
-  (`USDT`, `USDC`, `BTC`, `ETH`, `TRX`). Soportar cualquier activo listado por MEXC
-  requiere un proyecto posterior de catálogo, redes, fees y validación dinámica.
+- El activo/red de entrada sigue limitado a `ASSETS` / `SUPPORTED_PAIRS`; la salida se obtiene
+  del catálogo vivo de MEXC y siempre se ejecuta por un par directo, sin rutas intermedias.
 
 ---
 
@@ -1159,7 +1160,7 @@ docs/RUNBOOK.md                                  # sección operaciones manuales
 | 16 | Depósitos múltiples | Candidatos trazados; exacto confirmado tiene prioridad |
 | 17 | Refund wallet | Debe coincidir con activo/red de entrada |
 | 18 | Seguridad admin | Step-up TOTP para acciones monetarias |
-| 19 | Alcance v1 | Solo activos/redes internos actualmente soportados |
+| 19 | Alcance de entrada | Solo activos/redes internos actualmente soportados |
 
 ---
 
@@ -1167,10 +1168,9 @@ docs/RUNBOOK.md                                  # sección operaciones manuales
 
 - Usuario crea operaciones (self-service)
 - Refactor de bounce-engine tradicional para usar el resolver genérico (v1.1)
-- Catálogo dinámico de todos los activos/redes de MEXC
 - Congelar tipo de cambio por 15 min
 - Múltiples ops simultáneas por usuario
-- Cross-pairs sin USDT/USDC (ej. BTC → ETH directo)
+- Rutas spot de dos o más pasos cuando no existe un par directo
 - Integración con comprobante / receipt existente (evaluar en v1.1)
 
 ---

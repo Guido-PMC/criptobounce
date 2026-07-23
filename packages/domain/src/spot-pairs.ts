@@ -1,13 +1,13 @@
-import type { Asset } from './assets';
-
 export interface SpotPairCandidate {
   symbol: string;
   side: 'BUY' | 'SELL';
-  baseAsset: Asset;
-  quoteAsset: Asset;
+  baseAsset: string;
+  quoteAsset: string;
 }
 
-export function candidateSpotPairs(from: Asset, to: Asset): SpotPairCandidate[] {
+export function candidateSpotPairs(fromInput: string, toInput: string): SpotPairCandidate[] {
+  const from = fromInput.trim().toUpperCase();
+  const to = toInput.trim().toUpperCase();
   if (from === to) return [];
   return [
     {

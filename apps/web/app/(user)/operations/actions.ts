@@ -29,8 +29,8 @@ function isTradableStatus(status: string | undefined): boolean {
 }
 
 async function resolveFreshQuote(
-  from: Asset,
-  to: Asset,
+  from: string,
+  to: string,
 ): Promise<{ symbol: string | null; side: 'BUY' | 'SELL' | null; price: string }> {
   if (from === to) return { symbol: null, side: null, price: '1' };
 
@@ -88,7 +88,7 @@ export async function confirmManualOperationAction(
       operation.nominalAmount,
       operation.fromAsset as Asset,
     );
-    const quote = await resolveFreshQuote(operation.fromAsset as Asset, operation.toAsset as Asset);
+    const quote = await resolveFreshQuote(operation.fromAsset, operation.toAsset);
     const now = new Date();
     const nextState = operation.fromAsset === operation.toAsset ? 'withdrawing' : 'converting';
 

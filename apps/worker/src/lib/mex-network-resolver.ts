@@ -56,6 +56,25 @@ export function resolveMexNetwork(
   };
 }
 
+export function resolveSnapshottedMexNetwork(
+  mexCoin: string,
+  mexNetwork: string,
+  capital: MexCapitalConfigEntry[],
+): ResolvedMexNetwork | null {
+  const coinEntry = capital.find((entry) => entry.coin === mexCoin);
+  const network = coinEntry?.networkList.find(
+    (candidate) => candidate.network === mexNetwork && candidate.withdrawEnable === true,
+  );
+  if (!coinEntry || !network) return null;
+  return {
+    coin: coinEntry.coin,
+    network: network.network,
+    withdrawFee: parseOptionalNumber(network.withdrawFee),
+    withdrawMin: parseOptionalNumber(network.withdrawMin),
+    withdrawIntegerMultiple: network.withdrawIntegerMultiple ?? null,
+  };
+}
+
 function parseOptionalNumber(v: string | null | undefined): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);

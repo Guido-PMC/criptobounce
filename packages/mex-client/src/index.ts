@@ -4,3 +4,4 @@ export * from './sign';
 export * from './types';
 export * from './tracer';
 export * from './public';
+export * from './output-catalog';

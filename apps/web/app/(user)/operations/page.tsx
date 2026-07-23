@@ -183,6 +183,8 @@ export default async function OperationsPage() {
               />
               <Datum label="Red de depósito" value={active.fromNetwork} />
               <Datum label="Destino" value={`${active.toAsset} (${active.toNetwork})`} />
+              <Datum label="Dirección payout" value={active.payoutAddress} mono />
+              <Datum label="Memo/tag payout" value={active.payoutMemo ?? '—'} mono />
               <Datum
                 label="Estimado al crear"
                 value={`${active.estimatedOutput ?? '—'} ${active.toAsset}`}
@@ -208,6 +210,10 @@ export default async function OperationsPage() {
               <Datum
                 label="Salida ejecutada"
                 value={`${active.executedOutput ?? '—'} ${active.toAsset}`}
+              />
+              <Datum
+                label="Ajuste de precisión"
+                value={`${active.payoutPrecisionDust ?? '—'} ${active.toAsset}`}
               />
               <Datum
                 label="Conversión"

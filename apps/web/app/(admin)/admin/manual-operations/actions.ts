@@ -3,6 +3,7 @@
 import { randomInt } from 'node:crypto';
 import { type RevalidatedAdmin, requireAdminTotp } from '@/lib/admin-security';
 import { db } from '@/lib/db';
+import { buildWebMexClient } from '@/lib/mex-account-client';
 import {
   auditLog,
   bounceJobs,
@@ -30,11 +31,15 @@ import {
   buildExpectedDepositAmount,
   calculateManualSurplus,
   candidateSpotPairs,
-  isManualOperationProductPair,
   userPayoutOrderId,
   validateManualNominal,
 } from '@rb/domain';
-import { MexClient, fetchBookTickers } from '@rb/mex-client';
+import {
+  MexClient,
+  buildMexOutputCatalog,
+  fetchBookTickers,
+  selectMexOutputNetwork,
+} from '@rb/mex-client';
 import { and, desc, eq, gte, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
@@ -73,10 +78,18 @@ export interface ManualActionState {
 const createSchema = z.object({
   fromAsset: z.enum(ASSETS),
   fromNetwork: z.string().min(1),
-  toAsset: z.enum(ASSETS),
-  toNetwork: z.string().min(1),
+  toAsset: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z0-9]{2,20}$/),
+  toNetwork: z.string().trim().min(1).max(100),
   nominalAmount: z.string().min(1),
-  payoutWalletId: z.string().uuid(),
+  payoutAddress: z.string().trim().min(8).max(200).regex(/^\S+$/),
+  payoutMemo: z.string().trim().max(200).optional(),
+  payoutMexCoin: z.string().trim().min(1).max(100),
+  payoutMexNetwork: z.string().trim().min(1).max(100),
+  payoutConfirmed: z.literal('on'),
   refundWalletId: z.union([z.string().uuid(), z.literal('')]).optional(),
   internalNotes: z.string().max(2000).optional(),
 });
@@ -97,7 +110,16 @@ function isTradableStatus(status: string | undefined): boolean {
   return status !== undefined && ['1', 'TRADING', 'ENABLED'].includes(status.toUpperCase());
 }
 
-async function resolveFreshQuote(from: Asset, to: Asset): Promise<Quote> {
+function matchesMexPattern(value: string, pattern: string | null): boolean {
+  if (!pattern) return true;
+  try {
+    return new RegExp(pattern).test(value);
+  } catch {
+    throw new Error('MEX informó una regla de dirección inválida para esta red');
+  }
+}
+
+async function resolveFreshQuote(from: string, to: string): Promise<Quote> {
   if (from === to) return { symbol: null, side: null, price: 1 };
   const client = new MexClient({ apiKey: '', apiSecret: '' });
   for (const candidate of candidateSpotPairs(from, to)) {
@@ -117,8 +139,8 @@ async function resolveFreshQuote(from: Asset, to: Asset): Promise<Quote> {
 async function estimateOutput(
   userId: string,
   nominal: string,
-  toAsset: Asset,
-  toNetwork: string,
+  toAsset: string,
+  networkFee: number,
   quote: Quote,
 ): Promise<string> {
   const amount = Number(nominal);
@@ -128,13 +150,10 @@ async function estimateOutput(
       : quote.side === 'BUY'
         ? amount / quote.price
         : amount;
-  const [userCommission, platformCommission, feeSetting] = await Promise.all([
+  const [userCommission, platformCommission] = await Promise.all([
     getUserCommission(db, userId, toAsset),
     getPlatformCommission(db, toAsset),
-    db.query.systemSettings.findFirst({ where: eq(systemSettings.key, 'network_fees') }),
   ]);
-  const fees = (feeSetting?.value ?? {}) as Record<string, number | string>;
-  const networkFee = Number(fees[`${toAsset}-${toNetwork}`] ?? 0);
   const net =
     gross -
     (gross * userCommission.percent + userCommission.fixed) -
@@ -188,16 +207,11 @@ async function createValidatedOperation(
 ): Promise<string> {
   const nominal = validateManualNominal(input.nominalAmount, input.fromAsset);
   if (
-    !SUPPORTED_PAIRS.some((p) => p.asset === input.fromAsset && p.network === input.fromNetwork) ||
-    !SUPPORTED_PAIRS.some((p) => p.asset === input.toAsset && p.network === input.toNetwork)
+    !SUPPORTED_PAIRS.some(
+      (pair) => pair.asset === input.fromAsset && pair.network === input.fromNetwork,
+    )
   ) {
-    throw new Error('Activo o red no soportados');
-  }
-  if (!['USDT', 'USDC'].includes(input.fromAsset) && !['USDT', 'USDC'].includes(input.toAsset)) {
-    throw new Error('Al menos un lado debe ser USDT o USDC');
-  }
-  if (!isManualOperationProductPair(input.fromAsset, input.toAsset)) {
-    throw new Error('Par de producto no permitido');
+    throw new Error('Activo o red de entrada no soportados');
   }
 
   const [user, mex, maintenance] = await Promise.all([
@@ -216,16 +230,11 @@ async function createValidatedOperation(
   }
   await assertNoFinancialWork(mex.id);
 
-  const [payout, refund, depositAddress] = await Promise.all([
-    db.query.destinationWallets.findFirst({
-      where: and(
-        eq(destinationWallets.id, input.payoutWalletId),
-        eq(destinationWallets.userId, userId),
-        eq(destinationWallets.asset, input.toAsset),
-        eq(destinationWallets.network, input.toNetwork),
-        isNull(destinationWallets.deletedAt),
-      ),
-    }),
+  const mexClient = buildWebMexClient(mex);
+  const [exchangeInfo, capital, quote, refund, depositAddress] = await Promise.all([
+    mexClient.getExchangeInfo(),
+    mexClient.getCapitalConfig(),
+    resolveFreshQuote(input.fromAsset, input.toAsset),
     input.refundWalletId
       ? db.query.destinationWallets.findFirst({
           where: and(
@@ -246,18 +255,38 @@ async function createValidatedOperation(
       ),
     }),
   ]);
-  if (!payout) throw new Error('Wallet payout inválida');
   if (input.refundWalletId && !refund) throw new Error('Wallet de devolución inválida');
   if (!depositAddress?.address) throw new Error('La dirección de depósito MEX no está lista');
 
-  const quote = await resolveFreshQuote(input.fromAsset, input.toAsset);
-  const estimatedOutput = await estimateOutput(
-    userId,
-    nominal,
-    input.toAsset,
-    input.toNetwork,
-    quote,
+  const output = buildMexOutputCatalog(input.fromAsset, exchangeInfo, capital).find(
+    (candidate) => candidate.asset === input.toAsset,
   );
+  const payoutNetwork = output
+    ? selectMexOutputNetwork(output, input.payoutMexCoin, input.payoutMexNetwork)
+    : undefined;
+  if (!output || !payoutNetwork) {
+    throw new Error('El activo o la red de salida ya no están habilitados en MEX');
+  }
+  if (input.toNetwork !== input.payoutMexNetwork && input.toNetwork !== payoutNetwork.mexNetwork) {
+    throw new Error('La red payout seleccionada no coincide');
+  }
+  if (!matchesMexPattern(input.payoutAddress, payoutNetwork.addressRegex)) {
+    throw new Error('La dirección payout no tiene el formato esperado para esta red');
+  }
+  if (payoutNetwork.memoRequired && !input.payoutMemo) {
+    throw new Error('Esta red requiere memo/tag para el payout');
+  }
+  if (input.payoutMemo && !matchesMexPattern(input.payoutMemo, payoutNetwork.memoRegex)) {
+    throw new Error('El memo/tag no tiene el formato esperado para esta red');
+  }
+  if (output.symbol !== quote.symbol || output.side !== quote.side) {
+    throw new Error('El mercado de salida cambió; recargá el catálogo');
+  }
+  const payoutFee = Number(payoutNetwork.withdrawFee);
+  if (!Number.isFinite(payoutFee) || payoutFee < 0) {
+    throw new Error('MEX no informó un fee de retiro válido');
+  }
+  const estimatedOutput = await estimateOutput(userId, nominal, input.toAsset, payoutFee, quote);
   const recent = await db
     .select({ expected: manualOperations.expectedDepositAmount })
     .from(manualOperations)
@@ -334,14 +363,16 @@ async function createValidatedOperation(
       fromAsset: input.fromAsset,
       fromNetwork: input.fromNetwork,
       toAsset: input.toAsset,
-      toNetwork: input.toNetwork,
+      toNetwork: payoutNetwork.mexNetwork,
       nominalAmount: nominal,
       verifierDigits: verifier,
       expectedDepositAmount: expected,
       estimatedOutput,
-      payoutWalletId: payout.id,
-      payoutAddress: payout.address,
-      payoutMemo: payout.memo,
+      payoutWalletId: null,
+      payoutAddress: input.payoutAddress,
+      payoutMemo: input.payoutMemo || null,
+      payoutMexCoin: payoutNetwork.mexCoin,
+      payoutMexNetwork: payoutNetwork.mexNetwork,
       refundWalletId: refund?.id,
       refundAddress: refund?.address,
       refundMemo: refund?.memo,
@@ -357,10 +388,11 @@ async function createValidatedOperation(
       targetId: operationId,
       payload: {
         oldOpId: extendedFrom,
-        pair: `${input.fromAsset}/${input.fromNetwork}->${input.toAsset}/${input.toNetwork}`,
+        pair: `${input.fromAsset}/${input.fromNetwork}->${input.toAsset}/${payoutNetwork.mexNetwork}`,
         nominal,
         expected,
-        payoutWalletId: payout.id,
+        payoutMexCoin: payoutNetwork.mexCoin,
+        payoutMexNetwork: payoutNetwork.mexNetwork,
         refundWalletId: refund?.id ?? null,
       },
     });
@@ -373,7 +405,7 @@ async function createValidatedOperation(
           direction: 'out',
           type: 'manual_op_created',
           rawPayload: {
-            text: `Operación creada: depositá ${expected} ${input.fromAsset} (${input.fromNetwork}) a ${depositAddress.address}${depositAddress.memo ? ` memo ${depositAddress.memo}` : ''} en los próximos 15 min. Vas a recibir ${input.toAsset} en ${input.toNetwork}. Código: ${verifier}`,
+            text: `Operación creada: depositá ${expected} ${input.fromAsset} (${input.fromNetwork}) a ${depositAddress.address}${depositAddress.memo ? ` memo ${depositAddress.memo}` : ''} en los próximos 15 min. Vas a recibir ${input.toAsset} en ${payoutNetwork.mexNetwork}. Código: ${verifier}`,
           },
           dedupeKey: `manual-op:${operationId}:created:0`,
         })
@@ -403,7 +435,11 @@ export async function createManualOperationAction(
       toAsset: formString(formData, 'toAsset'),
       toNetwork: formString(formData, 'toNetwork'),
       nominalAmount: formString(formData, 'nominalAmount'),
-      payoutWalletId: formString(formData, 'payoutWalletId'),
+      payoutAddress: formString(formData, 'payoutAddress'),
+      payoutMemo: formString(formData, 'payoutMemo'),
+      payoutMexCoin: formString(formData, 'payoutMexCoin'),
+      payoutMexNetwork: formString(formData, 'payoutMexNetwork'),
+      payoutConfirmed: formString(formData, 'payoutConfirmed'),
       refundWalletId: formString(formData, 'refundWalletId'),
       internalNotes: formString(formData, 'internalNotes'),
     });
@@ -434,10 +470,14 @@ export async function extendManualOperationAction(
     {
       fromAsset: op.fromAsset as Asset,
       fromNetwork: op.fromNetwork,
-      toAsset: op.toAsset as Asset,
+      toAsset: op.toAsset,
       toNetwork: op.toNetwork,
       nominalAmount: op.nominalAmount,
-      payoutWalletId: op.payoutWalletId,
+      payoutAddress: op.payoutAddress,
+      payoutMemo: op.payoutMemo ?? '',
+      payoutMexCoin: op.payoutMexCoin ?? op.toAsset,
+      payoutMexNetwork: op.payoutMexNetwork ?? op.toNetwork,
+      payoutConfirmed: 'on',
       refundWalletId: op.refundWalletId ?? '',
       internalNotes: op.internalNotes ?? '',
     },
@@ -568,7 +608,7 @@ export async function confirmMismatchAction(
   } catch {
     throw new Error('El monto a ejecutar debe ser mayor a cero y no superar lo recibido');
   }
-  const quote = await resolveFreshQuote(op.fromAsset as Asset, op.toAsset as Asset);
+  const quote = await resolveFreshQuote(op.fromAsset, op.toAsset);
   const now = new Date();
   await db.transaction(async (tx) => {
     await tx

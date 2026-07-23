@@ -185,6 +185,9 @@ export const MexCapitalConfigEntrySchema = z
           withdrawMin: z.string().nullable().optional(),
           withdrawMax: z.string().nullable().optional(),
           contract: z.string().nullable().optional(),
+          addressRegex: z.string().nullable().optional(),
+          memoRegex: z.string().nullable().optional(),
+          isTag: z.union([z.boolean(), z.number(), z.string()]).nullable().optional(),
         })
         .passthrough(),
     ),

@@ -50,6 +50,20 @@
       "when": 1784751204286,
       "tag": "0006_clammy_stick",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784813155827,
+      "tag": "0007_daffy_amazoness",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784813639237,
+      "tag": "0008_overconfident_satana",
+      "breakpoints": true
     }
   ]
 }

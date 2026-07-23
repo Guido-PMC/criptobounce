@@ -11,6 +11,7 @@ import {
   type MexDepositAddress,
   MexDepositAddressSchema,
   MexDepositSchema,
+  type MexExchangeInfo,
   MexExchangeInfoSchema,
   type MexOrderResponse,
   MexOrderResponseSchema,
@@ -110,6 +111,13 @@ export class MexClient {
     const result = MexExchangeInfoSchema.safeParse(parsed);
     if (!result.success) return null;
     return result.data.symbols.find((s) => s.symbol === symbol) ?? null;
+  }
+
+  /** Fetch the complete public spot symbol catalog. */
+  async getExchangeInfo(): Promise<MexExchangeInfo> {
+    const res = await this.publicRequest('GET', '/api/v3/exchangeInfo');
+    if (!res.ok) throw new Error(`MEX exchangeInfo failed with HTTP ${res.status}`);
+    return MexExchangeInfoSchema.parse(await res.json());
   }
 
   // === Private ===

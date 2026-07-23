@@ -78,14 +78,17 @@ export const manualOperations = pgTable(
       precision: 20,
       scale: 8,
     }),
+    payoutPrecisionDust: numeric('payout_precision_dust', { precision: 20, scale: 8 }),
     payoutNetworkFee: numeric('payout_network_fee', { precision: 20, scale: 8 }),
     refundNetworkFee: numeric('refund_network_fee', { precision: 20, scale: 8 }),
 
-    payoutWalletId: uuid('payout_wallet_id')
-      .notNull()
-      .references(() => destinationWallets.id, { onDelete: 'restrict' }),
+    payoutWalletId: uuid('payout_wallet_id').references(() => destinationWallets.id, {
+      onDelete: 'restrict',
+    }),
     payoutAddress: text('payout_address').notNull(),
     payoutMemo: text('payout_memo'),
+    payoutMexCoin: text('payout_mex_coin'),
+    payoutMexNetwork: text('payout_mex_network'),
     refundWalletId: uuid('refund_wallet_id').references(() => destinationWallets.id, {
       onDelete: 'restrict',
     }),

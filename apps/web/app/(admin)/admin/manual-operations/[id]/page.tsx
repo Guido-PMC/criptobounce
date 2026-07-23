@@ -135,6 +135,7 @@ export default async function ManualOperationDetailPage({
           <Datum label="Quote confirmación" value={op.confirmationQuote ?? '—'} mono />
           <Datum label="Output bruto" value={op.convertedAmountGross ?? '—'} mono />
           <Datum label="Output ejecutado" value={op.executedOutput ?? '—'} mono />
+          <Datum label="Dust precisión payout" value={op.payoutPrecisionDust ?? '—'} mono />
           <Datum label="Resume state" value={op.resumeState ?? '—'} />
           <Datum label="Retries" value={String(op.retryCount)} />
           <Datum label="Error" value={op.lastError ?? '—'} />

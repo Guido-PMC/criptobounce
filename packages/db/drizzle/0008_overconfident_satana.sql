@@ -1,0 +1,1 @@
+ALTER TABLE "manual_operations" ADD COLUMN "payout_precision_dust" numeric(20, 8);

@@ -2,7 +2,6 @@ import type { WorkerEnv } from '@rb/config';
 import type { Database, ManualOperation } from '@rb/db';
 import { manualOperationDeposits, manualOperations, mexAccounts, withdrawals } from '@rb/db';
 import {
-  type Asset,
   candidateSpotPairs,
   manualOperationConversionOrderId,
   manualOperationPayoutOrderId,
@@ -13,7 +12,11 @@ import Decimal from 'decimal.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { runWithCorrelation } from './correlation';
 import { getPlatformCommission, getUserCommission } from './lib/commissions';
-import { getCachedCapitalConfig, resolveMexNetwork } from './lib/mex-network-resolver';
+import {
+  getCachedCapitalConfig,
+  resolveMexNetwork,
+  resolveSnapshottedMexNetwork,
+} from './lib/mex-network-resolver';
 import {
   baseQuantityDecimals,
   getSpotSymbolInfo,
@@ -190,11 +193,18 @@ async function handleConverting(
         info: NonNullable<Awaited<ReturnType<typeof getSpotSymbolInfo>>>;
       }
     | undefined;
-  for (const candidate of candidateSpotPairs(op.fromAsset as Asset, op.toAsset as Asset)) {
-    const info = await getSpotSymbolInfo(client, candidate.symbol);
+  if (op.spotSymbol && op.spotSide) {
+    const info = await getSpotSymbolInfo(client, op.spotSymbol);
     if (info && !['BREAK', 'DISABLED', 'OFFLINE'].includes(info.status?.toUpperCase() ?? '')) {
-      resolved = { symbol: candidate.symbol, side: candidate.side, info };
-      break;
+      resolved = { symbol: op.spotSymbol, side: op.spotSide as 'BUY' | 'SELL', info };
+    }
+  } else {
+    for (const candidate of candidateSpotPairs(op.fromAsset, op.toAsset)) {
+      const info = await getSpotSymbolInfo(client, candidate.symbol);
+      if (info && !['BREAK', 'DISABLED', 'OFFLINE'].includes(info.status?.toUpperCase() ?? '')) {
+        resolved = { symbol: candidate.symbol, side: candidate.side, info };
+        break;
+      }
     }
   }
   if (!resolved) throw new Error(`no active direct MEX pair for ${op.fromAsset}/${op.toAsset}`);
@@ -366,11 +376,13 @@ async function outputCalculation(
   db: Database,
   op: ManualOperation,
   liveFee: number,
+  withdrawIntegerMultiple?: Decimal.Value | null,
 ): Promise<{
   gross: Decimal;
   userCommission: Decimal;
   platformCommission: Decimal;
   payoutSubmitted: Decimal;
+  payoutPrecisionDust: Decimal;
   walletOutput: Decimal;
 }> {
   const gross = new Decimal(op.convertedAmountGross ?? op.amountToExecute ?? op.nominalAmount);
@@ -378,12 +390,45 @@ async function outputCalculation(
   const platform = await getPlatformCommission(db, op.toAsset);
   const userCommission = gross.mul(user.percent).add(user.fixed).toDecimalPlaces(8);
   const platformCommission = gross.mul(platform.percent).add(platform.fixed).toDecimalPlaces(8);
-  const payoutSubmitted = gross.sub(userCommission).sub(platformCommission);
+  const payoutAvailable = gross.sub(userCommission).sub(platformCommission);
+  const { submitted: payoutSubmitted, dust: payoutPrecisionDust } = calculatePayoutSubmission(
+    payoutAvailable,
+    withdrawIntegerMultiple,
+  );
   const walletOutput = payoutSubmitted.sub(liveFee);
   if (payoutSubmitted.lte(0) || walletOutput.lte(0)) {
     throw new Error('commissions and payout fee consume output');
   }
-  return { gross, userCommission, platformCommission, payoutSubmitted, walletOutput };
+  return {
+    gross,
+    userCommission,
+    platformCommission,
+    payoutSubmitted,
+    payoutPrecisionDust,
+    walletOutput,
+  };
+}
+
+export function calculatePayoutSubmission(
+  available: Decimal.Value,
+  integerMultiple?: Decimal.Value | null,
+): { submitted: Decimal; dust: Decimal } {
+  const amount = new Decimal(available);
+  if (!amount.isFinite() || amount.lte(0)) {
+    throw new Error('payout amount must be positive');
+  }
+  let submitted = amount.toDecimalPlaces(8, Decimal.ROUND_DOWN);
+  if (integerMultiple) {
+    const multiple = new Decimal(integerMultiple);
+    if (!multiple.isFinite() || multiple.lt(0)) {
+      throw new Error('invalid payout withdrawal multiple');
+    }
+    if (multiple.gt(0)) {
+      submitted = amount.div(multiple).floor().mul(multiple).toDecimalPlaces(8, Decimal.ROUND_DOWN);
+    }
+  }
+  if (submitted.lte(0)) throw new Error('payout amount truncates to zero');
+  return { submitted, dust: amount.sub(submitted) };
 }
 
 async function handlePayout(
@@ -395,11 +440,19 @@ async function handlePayout(
   validateExecutionAmounts(op);
   const client = buildMexClient(db, env, mex);
   const capital = await getCachedCapitalConfig(mex.id, client);
-  const resolved = resolveMexNetwork(op.toAsset, op.toNetwork, capital);
+  const resolved =
+    op.payoutMexCoin && op.payoutMexNetwork
+      ? resolveSnapshottedMexNetwork(op.payoutMexCoin, op.payoutMexNetwork, capital)
+      : resolveMexNetwork(op.toAsset, op.toNetwork, capital);
   if (!resolved || resolved.withdrawFee === null || resolved.withdrawMin === null) {
     throw new Error(`live payout constraints unavailable for ${op.toAsset}/${op.toNetwork}`);
   }
-  const calc = await outputCalculation(db, op, resolved.withdrawFee);
+  const calc = await outputCalculation(
+    db,
+    op,
+    resolved.withdrawFee,
+    resolved.withdrawIntegerMultiple,
+  );
   if (calc.payoutSubmitted.lt(resolved.withdrawMin)) {
     throw new Error(`payout below live MEX minimum ${resolved.withdrawMin}`);
   }
@@ -430,6 +483,7 @@ async function handlePayout(
         convertedAmountGross: calc.gross.toFixed(8),
         userCommissionAmount: calc.userCommission.toFixed(8),
         platformCommissionAmount: calc.platformCommission.toFixed(8),
+        payoutPrecisionDust: calc.payoutPrecisionDust.toFixed(8),
         payoutNetworkFee: String(resolved.withdrawFee),
         executedOutput: calc.walletOutput.toFixed(8),
         executedAt: new Date(),
