@@ -4,7 +4,11 @@ import {
   isFinanciallyLockingManualState,
 } from './financial-account-lock';
 import { resolveSnapshottedMexNetwork } from './lib/mex-network-resolver';
-import { calculatePayoutSubmission, calculateRefundSubmission } from './manual-operation-engine';
+import {
+  calculatePayoutSubmission,
+  calculateRefundSubmission,
+  withdrawalAmountStep,
+} from './manual-operation-engine';
 import { classifyManualDeposit } from './manual-operation-match';
 
 describe('manual operation worker helpers', () => {
@@ -34,6 +38,14 @@ describe('manual operation worker helpers', () => {
     const result = calculatePayoutSubmission('12.34567891', '0.01');
     expect(result.submitted.toFixed(8)).toBe('12.34000000');
     expect(result.dust.toFixed(8)).toBe('0.00567891');
+  });
+
+  it('interprets MEX integer withdrawal precision as decimal places', () => {
+    expect(withdrawalAmountStep('6')?.toFixed(8)).toBe('0.00000100');
+    expect(withdrawalAmountStep('18')?.toFixed(20)).toBe('0.00000000000000000100');
+    const result = calculatePayoutSubmission('12.34567891', '6');
+    expect(result.submitted.toFixed(8)).toBe('12.34567800');
+    expect(result.dust.toFixed(8)).toBe('0.00000091');
   });
 
   it('resolves the exact snapshotted MEX withdrawal route', () => {

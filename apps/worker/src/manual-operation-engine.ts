@@ -418,17 +418,29 @@ export function calculatePayoutSubmission(
     throw new Error('payout amount must be positive');
   }
   let submitted = amount.toDecimalPlaces(8, Decimal.ROUND_DOWN);
-  if (integerMultiple) {
-    const multiple = new Decimal(integerMultiple);
-    if (!multiple.isFinite() || multiple.lt(0)) {
-      throw new Error('invalid payout withdrawal multiple');
-    }
-    if (multiple.gt(0)) {
-      submitted = amount.div(multiple).floor().mul(multiple).toDecimalPlaces(8, Decimal.ROUND_DOWN);
-    }
+  const step = withdrawalAmountStep(integerMultiple);
+  if (step) {
+    submitted = amount.div(step).floor().mul(step).toDecimalPlaces(8, Decimal.ROUND_DOWN);
   }
   if (submitted.lte(0)) throw new Error('payout amount truncates to zero');
   return { submitted, dust: amount.sub(submitted) };
+}
+
+export function withdrawalAmountStep(integerMultiple?: Decimal.Value | null): Decimal | null {
+  if (integerMultiple === null || integerMultiple === undefined) return null;
+  const raw = String(integerMultiple).trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const decimalPlaces = Number(raw);
+    if (Number.isInteger(decimalPlaces) && decimalPlaces >= 0 && decimalPlaces <= 30) {
+      return new Decimal(10).pow(-decimalPlaces);
+    }
+  }
+  const step = new Decimal(raw);
+  if (!step.isFinite() || step.lte(0)) {
+    throw new Error('invalid withdrawal amount precision');
+  }
+  return step;
 }
 
 async function handlePayout(
@@ -535,12 +547,10 @@ export function calculateRefundSubmission(
   const minimum = new Decimal(withdrawMin);
   const fee = new Decimal(withdrawFee);
   if (!amount.isFinite() || amount.lte(minimum.add(fee))) return null;
-  if (integerMultiple) {
-    const multiple = new Decimal(integerMultiple);
-    if (multiple.gt(0)) {
-      const floored = amount.div(multiple).floor().mul(multiple);
-      return floored.gt(minimum.add(fee)) ? floored.toFixed(8) : null;
-    }
+  const step = withdrawalAmountStep(integerMultiple);
+  if (step) {
+    const floored = amount.div(step).floor().mul(step);
+    return floored.gt(minimum.add(fee)) ? floored.toFixed(8) : null;
   }
   return amount.toFixed(8);
 }
