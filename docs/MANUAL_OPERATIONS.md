@@ -714,6 +714,12 @@ Cada paso persiste estado antes de llamar a MEX. Ante dedup se recupera la orden
 tipos de withdrawal y avanzar la operación manual correspondiente; no alcanza con el
 comportamiento actual, que solo completa `bounce_jobs`.
 
+Reconciliation cierra automáticamente después de 48 horas los retiros que MEX confirma
+que no existen y marca como fallido su bounce u operación manual relacionada. También
+cierra trabajos `on_hold` de más de 48 horas cuando no tienen retiros pendientes,
+procesándose o exitosos. Nunca cierra automáticamente un retiro reconocido por MEX o con
+transacción on-chain.
+
 ### 9.4 Rechazo (admin)
 
 Cuando admin rechaza en `pending_admin_confirm`:

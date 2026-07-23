@@ -8,7 +8,7 @@ import {
   mexAccounts,
   withdrawals,
 } from '@rb/db';
-import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { runWithCorrelation, trace } from './correlation';
 import { logger } from './logger';
 import { buildMexClient } from './mex-account';
@@ -16,6 +16,21 @@ import { notify, tpl } from './notifier';
 
 const STALE_PENDING_MS = 60_000;
 const STALE_SUBMITTED_MS = 5 * 60_000;
+const ABANDONED_WITHDRAWAL_MS = 48 * 60 * 60_000;
+const ACTIVE_MANUAL_STATES = [
+  'awaiting_deposit',
+  'awaiting_deposit_confirmation',
+  'pending_user_confirm',
+  'pending_admin_confirm',
+  'pending_candidate_resolution',
+  'converting',
+  'awaiting_conversion',
+  'withdrawing',
+  'awaiting_withdrawal',
+  'refunding',
+  'awaiting_refund',
+  'on_hold',
+] as const;
 
 interface Ctx {
   db: Database;
@@ -23,6 +38,10 @@ interface Ctx {
 }
 
 type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+export function shouldCloseMissingWithdrawal(createdAt: Date, now = new Date()): boolean {
+  return now.getTime() - createdAt.getTime() >= ABANDONED_WITHDRAWAL_MS;
+}
 
 export function startReconciliation({ db, env }: Ctx): () => void {
   let stopped = false;
@@ -74,6 +93,7 @@ async function runOnce(db: Database, env: WorkerEnv) {
         });
       }
     }
+    await closeAbandonedParents(db);
   });
 }
 
@@ -86,6 +106,19 @@ async function reconcileOne(db: Database, env: WorkerEnv, w: typeof withdrawals.
   const history = await client.getWithdrawHistory({ withdrawOrderId: w.withdrawOrderId, limit: 5 });
   const found = history.find((h) => h.withdrawOrderId === w.withdrawOrderId);
   if (!found) {
+    if (shouldCloseMissingWithdrawal(w.createdAt)) {
+      const closed = await closeMissingWithdrawal(db, w);
+      if (closed) {
+        await trace(
+          db,
+          'warn',
+          'reconcile_abandoned_closed',
+          'withdrawal missing in MEX for more than 48 hours; related work closed',
+          { withdrawOrderId: w.withdrawOrderId },
+        );
+        return;
+      }
+    }
     await trace(db, 'debug', 'reconcile_not_found', 'still missing in MEX', {
       withdrawOrderId: w.withdrawOrderId,
     });
@@ -216,6 +249,183 @@ async function reconcileOne(db: Database, env: WorkerEnv, w: typeof withdrawals.
         reconciledAt: new Date(),
       })
       .where(eq(withdrawals.id, w.id));
+  }
+}
+
+async function closeMissingWithdrawal(
+  db: Database,
+  withdrawal: typeof withdrawals.$inferSelect,
+): Promise<boolean> {
+  const reason = 'Cierre automático: retiro no encontrado en MEX después de más de 48 horas';
+  return db.transaction(async (tx) => {
+    const [lockedWithdrawal] = await tx
+      .update(withdrawals)
+      .set({ updatedAt: sql`${withdrawals.updatedAt}` })
+      .where(
+        and(
+          eq(withdrawals.id, withdrawal.id),
+          inArray(withdrawals.status, ['pending', 'submitted']),
+          isNull(withdrawals.mexWithdrawId),
+          isNull(withdrawals.onChainTx),
+        ),
+      )
+      .returning({ id: withdrawals.id });
+    if (!lockedWithdrawal) return false;
+
+    let bounceDepositId: string | null = null;
+    let parentClosed = false;
+    if (withdrawal.bounceJobId) {
+      const [closedBounce] = await tx
+        .update(bounceJobs)
+        .set({
+          state: 'failed',
+          lastError: sql`concat_ws(' | ', nullif(${bounceJobs.lastError}, ''), ${reason})`,
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(bounceJobs.id, withdrawal.bounceJobId),
+            sql`${bounceJobs.state} NOT IN ('done', 'failed')`,
+            isNull(bounceJobs.lockedBy),
+            isNull(bounceJobs.lockedAt),
+          ),
+        )
+        .returning({ depositId: bounceJobs.depositId });
+      parentClosed = Boolean(closedBounce);
+      bounceDepositId = closedBounce?.depositId ?? null;
+    } else if (withdrawal.manualOperationId) {
+      const [closedManual] = await tx
+        .update(manualOperations)
+        .set({
+          state: 'failed',
+          terminalState: 'failed',
+          lastError: reason,
+          failedAt: new Date(),
+          completedAt: new Date(),
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(manualOperations.id, withdrawal.manualOperationId),
+            inArray(manualOperations.state, [...ACTIVE_MANUAL_STATES]),
+            isNull(manualOperations.lockedBy),
+            isNull(manualOperations.lockedAt),
+          ),
+        )
+        .returning({ id: manualOperations.id });
+      parentClosed = Boolean(closedManual);
+    }
+    if (!parentClosed) return false;
+
+    const [closed] = await tx
+      .update(withdrawals)
+      .set({
+        status: 'failed',
+        error: reason,
+        reconciledAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(withdrawals.id, lockedWithdrawal.id),
+          inArray(withdrawals.status, ['pending', 'submitted']),
+          isNull(withdrawals.mexWithdrawId),
+          isNull(withdrawals.onChainTx),
+        ),
+      )
+      .returning({ id: withdrawals.id });
+    if (!closed) throw new Error('stale withdrawal changed while closing its parent');
+    if (bounceDepositId) {
+      await tx.update(deposits).set({ status: 'failed' }).where(eq(deposits.id, bounceDepositId));
+    }
+    return true;
+  });
+}
+
+async function closeAbandonedParents(db: Database): Promise<void> {
+  const cutoff = new Date(Date.now() - ABANDONED_WITHDRAWAL_MS);
+  const reason = 'Cierre automático: trabajo financiero abierto durante más de 48 horas';
+  const [closedBounces, closedManual] = await db.transaction(async (tx) => {
+    const bounces = await tx
+      .update(bounceJobs)
+      .set({
+        state: 'failed',
+        lastError: sql`concat_ws(' | ', nullif(${bounceJobs.lastError}, ''), ${reason})`,
+        lockedAt: null,
+        lockedBy: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          lt(bounceJobs.updatedAt, cutoff),
+          eq(bounceJobs.state, 'on_hold'),
+          isNull(bounceJobs.lockedBy),
+          isNull(bounceJobs.lockedAt),
+          sql`NOT EXISTS (
+            SELECT 1 FROM withdrawals w
+            WHERE w.bounce_job_id = ${bounceJobs.id}
+              AND (
+                w.status IN ('pending', 'submitted', 'processing', 'success')
+                OR w.on_chain_tx IS NOT NULL
+              )
+          )`,
+        ),
+      )
+      .returning({ id: bounceJobs.id, depositId: bounceJobs.depositId });
+    if (bounces.length > 0) {
+      await tx
+        .update(deposits)
+        .set({ status: 'failed' })
+        .where(
+          inArray(
+            deposits.id,
+            bounces.map((bounce) => bounce.depositId),
+          ),
+        );
+    }
+
+    const manual = await tx
+      .update(manualOperations)
+      .set({
+        state: 'failed',
+        terminalState: 'failed',
+        lastError: reason,
+        failedAt: new Date(),
+        completedAt: new Date(),
+        lockedAt: null,
+        lockedBy: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          lt(manualOperations.updatedAt, cutoff),
+          eq(manualOperations.state, 'on_hold'),
+          isNull(manualOperations.lockedBy),
+          isNull(manualOperations.lockedAt),
+          sql`NOT EXISTS (
+            SELECT 1 FROM withdrawals w
+            WHERE w.manual_operation_id = ${manualOperations.id}
+              AND (
+                w.status IN ('pending', 'submitted', 'processing', 'success')
+                OR w.on_chain_tx IS NOT NULL
+              )
+          )`,
+        ),
+      )
+      .returning({ id: manualOperations.id });
+    return [bounces, manual] as const;
+  });
+  if (closedBounces.length > 0 || closedManual.length > 0) {
+    await trace(
+      db,
+      'warn',
+      'stale_financial_work_closed',
+      `closed bounces=${closedBounces.length}, manual_operations=${closedManual.length}`,
+    );
   }
 }
 
