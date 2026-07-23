@@ -47,6 +47,11 @@ interface ManualQuotePreview {
   quotedAt: string;
 }
 
+interface DepositDestination {
+  address: string;
+  memo: string | null;
+}
+
 export function ManualOperationDialog({
   userId,
   wallets,
@@ -76,6 +81,7 @@ export function ManualOperationDialog({
   const [quoteError, setQuoteError] = useState<string>();
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteRefresh, setQuoteRefresh] = useState(0);
+  const [depositDestination, setDepositDestination] = useState<DepositDestination | null>(null);
   const [catalogError, setCatalogError] = useState<string>();
   const [catalogLoading, setCatalogLoading] = useState(true);
   const refundWallets = useMemo(
@@ -100,17 +106,23 @@ export function ManualOperationDialog({
     setPayoutConfirmed(false);
     setQuote(null);
     setQuoteError(undefined);
-    const params = new URLSearchParams({ userId, fromAsset });
+    setDepositDestination(null);
+    const params = new URLSearchParams({ userId, fromAsset, fromNetwork });
     fetch(`/api/admin/manual-operations/catalog?${params}`, {
       signal: abort.signal,
       cache: 'no-store',
     })
       .then(async (response) => {
-        const payload = (await response.json()) as { assets?: MexOutputAsset[]; error?: string };
+        const payload = (await response.json()) as {
+          assets?: MexOutputAsset[];
+          depositDestination?: DepositDestination | null;
+          error?: string;
+        };
         if (!response.ok || !payload.assets) {
           throw new Error(payload.error ?? 'No se pudo cargar el catálogo MEX');
         }
         setOutputAssets(payload.assets);
+        setDepositDestination(payload.depositDestination ?? null);
         const initial =
           payload.assets.find((output) => output.asset === 'BTC') ?? payload.assets[0] ?? null;
         setToAsset(initial?.asset ?? '');
@@ -124,7 +136,7 @@ export function ManualOperationDialog({
         if (!abort.signal.aborted) setCatalogLoading(false);
       });
     return () => abort.abort();
-  }, [fromAsset, userId]);
+  }, [fromAsset, fromNetwork, userId]);
 
   useEffect(() => {
     if (!toAsset || !payoutNetwork || !activeAmount || !/^\d+(?:\.\d+)?$/.test(activeAmount)) {
@@ -417,6 +429,38 @@ export function ManualOperationDialog({
                 ejecución final se realiza a mercado.
               </p>
             </div>
+            <div className="space-y-3 rounded-md border border-blue-500/40 bg-blue-50/60 p-3 sm:col-span-2">
+              <div>
+                <p className="text-sm font-semibold">Depósito de entrada</p>
+                <p className="text-xs text-muted-foreground">
+                  Primero creá la operación. Después enviá estos fondos; no los envíes a la
+                  dirección payout.
+                </p>
+              </div>
+              {quote && depositDestination ? (
+                <div className="space-y-2 text-sm">
+                  <QuoteDatum
+                    label="Monto exacto a enviar"
+                    value={`${quote.exactDepositAmount} ${fromAsset}`}
+                  />
+                  <QuoteDatum label="Red de envío" value={fromNetwork} />
+                  <CopyDatum label="Dirección de depósito MEX" value={depositDestination.address} />
+                  {depositDestination.memo ? (
+                    <CopyDatum label="Memo/tag obligatorio" value={depositDestination.memo} />
+                  ) : null}
+                </div>
+              ) : catalogLoading || quoteLoading ? (
+                <p className="text-sm text-muted-foreground">Cargando instrucciones de depósito…</p>
+              ) : !depositDestination ? (
+                <p className="text-sm text-destructive">
+                  No hay una dirección de depósito disponible para {fromAsset} en {fromNetwork}.
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Ingresá un monto válido para obtener el total exacto.
+                </p>
+              )}
+            </div>
             <Field label="Dirección payout">
               <Input
                 name="payoutAddress"
@@ -485,7 +529,13 @@ export function ManualOperationDialog({
               className="sm:col-span-2"
               type="submit"
               disabled={
-                pending || catalogLoading || quoteLoading || !quote || !payoutNetwork || !toAsset
+                pending ||
+                catalogLoading ||
+                quoteLoading ||
+                !quote ||
+                !depositDestination ||
+                !payoutNetwork ||
+                !toAsset
               }
             >
               {pending ? 'Validando…' : 'Crear operación'}
@@ -511,6 +561,27 @@ function QuoteDatum({ label, value }: { label: string; value: string }) {
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="font-mono">{value}</p>
+    </div>
+  );
+}
+
+function CopyDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 break-all font-mono">{value}</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard.writeText(value);
+          }}
+        >
+          Copiar
+        </Button>
+      </div>
     </div>
   );
 }
