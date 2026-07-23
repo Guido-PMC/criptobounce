@@ -1,11 +1,16 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
-import type { Database } from '@rb/db';
 import type { WorkerEnv } from '@rb/config';
+import type { Database } from '@rb/db';
 import { mexAccounts, withdrawals } from '@rb/db';
-import { logger } from './logger';
-import { runWithCorrelation, trace } from './correlation';
-import { buildMexClient } from './mex-account';
 import { MexBusinessError } from '@rb/mex-client';
+import { and, asc, eq, isNull } from 'drizzle-orm';
+import { runWithCorrelation, trace } from './correlation';
+import {
+  claimFinancialAccountLease,
+  isFinancialAccountLocked,
+  releaseFinancialAccountLease,
+} from './financial-account-lock';
+import { logger } from './logger';
+import { buildMexClient } from './mex-account';
 
 const POLL_MS = 10_000;
 
@@ -56,48 +61,71 @@ async function runOnce(db: Database, env: WorkerEnv) {
 
   for (const w of queued) {
     if (!w.mexAccountId) continue;
+    if (await isFinancialAccountLocked(db, w.mexAccountId)) {
+      logger.info(
+        { withdrawalId: w.id, mexAccountId: w.mexAccountId },
+        'manual sweep deferred: manual operation holds financial account lock',
+      );
+      continue;
+    }
     const mex = await db.query.mexAccounts.findFirst({ where: eq(mexAccounts.id, w.mexAccountId) });
     if (!mex) continue;
+    const leaseOwner = `manual-sweep:${w.id}`;
+    if (
+      !(await claimFinancialAccountLease(
+        db,
+        w.mexAccountId,
+        'manual_sweep',
+        leaseOwner,
+        30 * 60_000,
+      ))
+    ) {
+      continue;
+    }
 
-    await runWithCorrelation(
-      db,
-      {
-        type: 'manual_sweep',
-        userId: w.userId ?? undefined,
-        entityType: 'withdrawal',
-        entityId: w.id,
-        summary: `manual sweep ${w.amount} ${w.asset} ${w.network}`,
-      },
-      async () => {
-        const client = buildMexClient(db, env, mex);
-        try {
-          const res = await client.withdraw({
-            coin: w.asset,
-            network: w.network,
-            address: w.address,
-            amount: w.amount,
-            withdrawOrderId: w.withdrawOrderId,
-            memo: w.memo ?? undefined,
-            remark: 'manual_sweep',
-          });
-          await db
-            .update(withdrawals)
-            .set({ mexWithdrawId: res.id, status: 'submitted' })
-            .where(eq(withdrawals.id, w.id));
-          await trace(db, 'info', 'manual_sweep_submitted', `mexId=${res.id}`);
-        } catch (err) {
-          if (err instanceof MexBusinessError && err.isDedupHit) {
-            await trace(db, 'info', 'manual_sweep_dedup_hit', 'MEX already saw this');
-            return;
+    try {
+      await runWithCorrelation(
+        db,
+        {
+          type: 'manual_sweep',
+          userId: w.userId ?? undefined,
+          entityType: 'withdrawal',
+          entityId: w.id,
+          summary: `manual sweep ${w.amount} ${w.asset} ${w.network}`,
+        },
+        async () => {
+          const client = buildMexClient(db, env, mex);
+          try {
+            const res = await client.withdraw({
+              coin: w.asset,
+              network: w.network,
+              address: w.address,
+              amount: w.amount,
+              withdrawOrderId: w.withdrawOrderId,
+              memo: w.memo ?? undefined,
+              remark: 'manual_sweep',
+            });
+            await db
+              .update(withdrawals)
+              .set({ mexWithdrawId: res.id, status: 'submitted' })
+              .where(eq(withdrawals.id, w.id));
+            await trace(db, 'info', 'manual_sweep_submitted', `mexId=${res.id}`);
+          } catch (err) {
+            if (err instanceof MexBusinessError && err.isDedupHit) {
+              await trace(db, 'info', 'manual_sweep_dedup_hit', 'MEX already saw this');
+              return;
+            }
+            const reason = err instanceof Error ? err.message : String(err);
+            await db
+              .update(withdrawals)
+              .set({ status: 'failed', error: reason })
+              .where(eq(withdrawals.id, w.id));
+            await trace(db, 'error', 'manual_sweep_failed', reason);
           }
-          const reason = err instanceof Error ? err.message : String(err);
-          await db
-            .update(withdrawals)
-            .set({ status: 'failed', error: reason })
-            .where(eq(withdrawals.id, w.id));
-          await trace(db, 'error', 'manual_sweep_failed', reason);
-        }
-      },
-    );
+        },
+      );
+    } finally {
+      await releaseFinancialAccountLease(db, w.mexAccountId, leaseOwner);
+    }
   }
 }

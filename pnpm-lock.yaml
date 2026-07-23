@@ -208,6 +208,9 @@ importers:
       '@rb/mex-client':
         specifier: workspace:*
         version: link:../../packages/mex-client
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
       dotenv:
         specifier: ^16.4.7
         version: 16.6.1
@@ -310,6 +313,9 @@ importers:
 
   packages/domain:
     dependencies:
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -2087,6 +2093,9 @@ packages:
 
   decimal.js-light@2.5.1:
     resolution: {integrity: sha512-qIMFpTMZmny+MMIitAB6D7iVPEorVw6YQRWkvarTkT4tBeSLLiHzcwj6q0MmYSFCiVpiqPJTJEYIrpcPzVEIvg==}
+
+  decimal.js@10.6.0:
+    resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
 
   deep-eql@5.0.2:
     resolution: {integrity: sha512-h5k/5U50IJJFpzfL6nO9jaaumfjO/f2NjK/oYB2Djzm4p9L+3T9qWpZqZ2hAbLPuuYq9wrU08WQyBTL5GbPk5Q==}
@@ -4451,6 +4460,8 @@ snapshots:
   decamelize@1.2.0: {}
 
   decimal.js-light@2.5.1: {}
+
+  decimal.js@10.6.0: {}
 
   deep-eql@5.0.2: {}
 

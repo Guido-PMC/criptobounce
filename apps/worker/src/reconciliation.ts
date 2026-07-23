@@ -1,10 +1,18 @@
-import { and, eq, inArray, lt } from 'drizzle-orm';
-import type { Database } from '@rb/db';
 import type { WorkerEnv } from '@rb/config';
-import { bounceJobs, deposits, mexAccounts, withdrawals } from '@rb/db';
-import { logger } from './logger';
+import type { Database } from '@rb/db';
+import {
+  bounceJobs,
+  deposits,
+  manualOperationDeposits,
+  manualOperations,
+  mexAccounts,
+  withdrawals,
+} from '@rb/db';
+import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import { runWithCorrelation, trace } from './correlation';
+import { logger } from './logger';
 import { buildMexClient } from './mex-account';
+import { notify, tpl } from './notifier';
 
 const STALE_PENDING_MS = 60_000;
 const STALE_SUBMITTED_MS = 5 * 60_000;
@@ -13,6 +21,8 @@ interface Ctx {
   db: Database;
   env: WorkerEnv;
 }
+
+type DbTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 export function startReconciliation({ db, env }: Ctx): () => void {
   let stopped = false;
@@ -47,9 +57,9 @@ async function runOnce(db: Database, env: WorkerEnv) {
       .select()
       .from(withdrawals)
       .where(
-        and(
-          inArray(withdrawals.status, ['pending', 'submitted']),
-          lt(withdrawals.createdAt, cutoffSubmitted),
+        or(
+          and(eq(withdrawals.status, 'pending'), lt(withdrawals.createdAt, cutoffPending)),
+          and(eq(withdrawals.status, 'submitted'), lt(withdrawals.createdAt, cutoffSubmitted)),
         ),
       )
       .limit(50);
@@ -67,11 +77,7 @@ async function runOnce(db: Database, env: WorkerEnv) {
   });
 }
 
-async function reconcileOne(
-  db: Database,
-  env: WorkerEnv,
-  w: typeof withdrawals.$inferSelect,
-) {
+async function reconcileOne(db: Database, env: WorkerEnv, w: typeof withdrawals.$inferSelect) {
   if (!w.mexAccountId) return;
   const mex = await db.query.mexAccounts.findFirst({ where: eq(mexAccounts.id, w.mexAccountId) });
   if (!mex) return;
@@ -114,20 +120,90 @@ async function reconcileOne(
             .where(eq(deposits.id, job.depositId));
         }
       }
+      if (w.manualOperationId) {
+        if (w.type === 'manual_operation_refund') {
+          await tx
+            .update(manualOperationDeposits)
+            .set({ status: 'refunded', updatedAt: new Date() })
+            .where(
+              and(
+                eq(manualOperationDeposits.manualOperationId, w.manualOperationId),
+                eq(manualOperationDeposits.status, 'selected'),
+              ),
+            );
+        }
+        await advanceManualOperationAfterWithdrawal(tx, w);
+      }
     });
+    if (w.manualOperationId) {
+      const op = await db.query.manualOperations.findFirst({
+        where: eq(manualOperations.id, w.manualOperationId),
+      });
+      if (
+        op?.state === 'done' ||
+        op?.state === 'cancelled' ||
+        op?.state === 'pending_candidate_resolution'
+      ) {
+        await notify(db, {
+          type:
+            op.state === 'done'
+              ? 'manual_op_done'
+              : op.state === 'cancelled'
+                ? 'manual_op_cancelled'
+                : 'manual_op_candidate_resolution',
+          userId: op.userId,
+          text:
+            op.state === 'done'
+              ? tpl.manualDone(op.executedOutput ?? '0', op.toAsset)
+              : op.state === 'cancelled'
+                ? tpl.manualCancelled()
+                : tpl.manualCandidateResolution(),
+          dedupeKey: `manual-op:${op.id}:${op.state}`,
+        });
+      }
+    }
     await trace(db, 'info', 'reconciled_success', 'withdrawal succeeded', {
       withdrawOrderId: w.withdrawOrderId,
     });
   } else if (found.status === 8 || found.status === 2) {
-    await db
-      .update(withdrawals)
-      .set({
-        status: 'failed',
-        mexWithdrawId: found.id,
-        reconciledAt: new Date(),
-        error: `MEX status=${found.status}`,
-      })
-      .where(eq(withdrawals.id, w.id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(withdrawals)
+        .set({
+          status: 'failed',
+          mexWithdrawId: found.id,
+          reconciledAt: new Date(),
+          error: `MEX status=${found.status}`,
+        })
+        .where(eq(withdrawals.id, w.id));
+      if (w.manualOperationId) {
+        await tx
+          .update(manualOperations)
+          .set({
+            state: 'on_hold',
+            resumeState: w.type === 'manual_operation_refund' ? 'refunding' : 'withdrawing',
+            lastError: `withdrawal failed at MEX (status=${found.status})`,
+            retryCount: sql`${manualOperations.retryCount} + 1`,
+            lockedAt: null,
+            lockedBy: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(manualOperations.id, w.manualOperationId));
+      }
+    });
+    if (w.manualOperationId) {
+      const op = await db.query.manualOperations.findFirst({
+        where: eq(manualOperations.id, w.manualOperationId),
+      });
+      if (op) {
+        await notify(db, {
+          type: 'manual_op_on_hold',
+          userId: op.userId,
+          text: tpl.manualOnHold(`retiro rechazado por MEX (status=${found.status})`),
+          dedupeKey: `manual-op:${op.id}:withdraw-failed:${w.id}`,
+        });
+      }
+    }
     await trace(db, 'warn', 'reconciled_failure', `MEX status=${found.status}`, {
       withdrawOrderId: w.withdrawOrderId,
     });
@@ -141,4 +217,62 @@ async function reconcileOne(
       })
       .where(eq(withdrawals.id, w.id));
   }
+}
+
+async function advanceManualOperationAfterWithdrawal(
+  tx: DbTransaction,
+  withdrawal: typeof withdrawals.$inferSelect,
+): Promise<void> {
+  if (!withdrawal.manualOperationId) return;
+  const op = await tx.query.manualOperations.findFirst({
+    where: eq(manualOperations.id, withdrawal.manualOperationId),
+  });
+  if (!op) return;
+
+  if (withdrawal.type === 'manual_operation_payout') {
+    const hasSurplus = Number(op.surplusAmount ?? '0') > 0;
+    if (hasSurplus && op.refundWalletId && op.refundAddress) {
+      await tx
+        .update(manualOperations)
+        .set({ state: 'refunding', updatedAt: new Date(), lockedAt: null, lockedBy: null })
+        .where(
+          and(eq(manualOperations.id, op.id), eq(manualOperations.state, 'awaiting_withdrawal')),
+        );
+      return;
+    }
+  } else if (withdrawal.type !== 'manual_operation_refund') {
+    return;
+  }
+
+  const unresolved = await tx
+    .select({ id: manualOperationDeposits.id })
+    .from(manualOperationDeposits)
+    .where(
+      and(
+        eq(manualOperationDeposits.manualOperationId, op.id),
+        eq(manualOperationDeposits.status, 'candidate'),
+      ),
+    );
+  const nextState =
+    unresolved.length > 0
+      ? 'pending_candidate_resolution'
+      : op.terminalState === 'cancelled'
+        ? 'cancelled'
+        : 'done';
+  await tx
+    .update(manualOperations)
+    .set({
+      state: nextState,
+      completedAt: nextState === 'done' || nextState === 'cancelled' ? new Date() : null,
+      cancelledAt: nextState === 'cancelled' ? new Date() : op.cancelledAt,
+      lockedAt: null,
+      lockedBy: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(manualOperations.id, op.id),
+        inArray(manualOperations.state, ['awaiting_withdrawal', 'awaiting_refund']),
+      ),
+    );
 }

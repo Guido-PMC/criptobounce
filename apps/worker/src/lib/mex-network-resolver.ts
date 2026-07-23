@@ -25,6 +25,7 @@ export interface ResolvedMexNetwork {
   /** Live withdraw fee from MEX, in `coin` units. Null when MEX didn't expose it. */
   withdrawFee: number | null;
   withdrawMin: number | null;
+  withdrawIntegerMultiple: string | null;
 }
 
 export function resolveMexNetwork(
@@ -51,6 +52,7 @@ export function resolveMexNetwork(
     network: enabled.network,
     withdrawFee: parseOptionalNumber(enabled.withdrawFee),
     withdrawMin: parseOptionalNumber(enabled.withdrawMin),
+    withdrawIntegerMultiple: enabled.withdrawIntegerMultiple ?? null,
   };
 }
 

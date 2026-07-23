@@ -101,6 +101,23 @@ export const MexOrderResponseSchema = z
   .passthrough();
 export type MexOrderResponse = z.infer<typeof MexOrderResponseSchema>;
 
+export const MexTradeSchema = z
+  .object({
+    symbol: z.string(),
+    id: z.union([z.string(), z.number()]).transform(String),
+    orderId: z.union([z.string(), z.number()]).transform(String),
+    price: z.union([z.string(), z.number()]).transform(String),
+    qty: z.union([z.string(), z.number()]).transform(String),
+    quoteQty: z.union([z.string(), z.number()]).transform(String),
+    commission: z.union([z.string(), z.number()]).transform(String),
+    commissionAsset: z.string(),
+    time: z.number(),
+    isBuyer: z.boolean().optional(),
+    isMaker: z.boolean().optional(),
+  })
+  .passthrough();
+export type MexTrade = z.infer<typeof MexTradeSchema>;
+
 export const MexDepositAddressSchema = z.object({
   coin: z.string(),
   network: z.string(),

@@ -1,6 +1,6 @@
-import { and, eq, gt, isNull, sql, sum } from 'drizzle-orm';
-import type { Database } from '@rb/db';
+import { randomUUID } from 'node:crypto';
 import type { WorkerEnv } from '@rb/config';
+import type { Database } from '@rb/db';
 import {
   bounceJobs,
   deposits,
@@ -10,13 +10,18 @@ import {
   withdrawals,
 } from '@rb/db';
 import { conversionClientOrderId, platformSweepOrderId } from '@rb/domain';
+import { MexBusinessError } from '@rb/mex-client';
+import { and, eq, gt, isNull, sql, sum } from 'drizzle-orm';
 import cron from 'node-cron';
-import { logger } from './logger';
 import { runWithCorrelation, trace } from './correlation';
+import {
+  claimFinancialAccountLease,
+  isFinancialAccountLocked,
+  releaseFinancialAccountLease,
+} from './financial-account-lock';
+import { logger } from './logger';
 import { isMaintenanceActive } from './maintenance';
 import { buildMexClient } from './mex-account';
-import { MexBusinessError } from '@rb/mex-client';
-import { randomUUID } from 'node:crypto';
 
 const SWEEP_THRESHOLD = 5;
 
@@ -86,19 +91,58 @@ async function runSweep(db: Database, env: WorkerEnv) {
       `);
 
       for (const row of candidates as unknown as Array<{ mex_account_id: string; total: string }>) {
+        if (await isFinancialAccountLocked(db, row.mex_account_id)) {
+          await trace(
+            db,
+            'info',
+            'sweep_financial_lock',
+            `account ${row.mex_account_id} reserved by manual operation`,
+          );
+          continue;
+        }
         const total = Number(row.total);
         if (total < SWEEP_THRESHOLD) {
-          await trace(db, 'debug', 'sweep_below_threshold', `account ${row.mex_account_id} total=${total}`);
+          await trace(
+            db,
+            'debug',
+            'sweep_below_threshold',
+            `account ${row.mex_account_id} total=${total}`,
+          );
+          continue;
+        }
+        const leaseOwner = `sweep:${sweepRunId}:${row.mex_account_id}`;
+        const claimed = await claimFinancialAccountLease(
+          db,
+          row.mex_account_id,
+          'platform_sweep',
+          leaseOwner,
+        );
+        if (!claimed) {
+          await trace(
+            db,
+            'info',
+            'sweep_financial_lock_race',
+            `account ${row.mex_account_id} became reserved`,
+          );
           continue;
         }
         try {
-          const swept = await sweepAccount(db, env, sweepRunId, row.mex_account_id, total, sweepWallet);
+          const swept = await sweepAccount(
+            db,
+            env,
+            sweepRunId,
+            row.mex_account_id,
+            total,
+            sweepWallet,
+          );
           totalSwept += swept;
         } catch (err) {
           failureCount += 1;
           await trace(db, 'error', 'sweep_account_failed', String(err), {
             mexAccountId: row.mex_account_id,
           });
+        } finally {
+          await releaseFinancialAccountLease(db, row.mex_account_id, leaseOwner);
         }
       }
     },
@@ -119,7 +163,7 @@ async function sweepAccount(
   env: WorkerEnv,
   sweepRunId: string,
   mexAccountId: string,
-  totalUsdEquivalent: number,
+  _totalUsdEquivalent: number,
   sweepWallet: typeof platformSweepWallet.$inferSelect,
 ): Promise<number> {
   const mex = await db.query.mexAccounts.findFirst({ where: eq(mexAccounts.id, mexAccountId) });
@@ -143,7 +187,12 @@ async function sweepAccount(
         quantity: bal.free,
         newClientOrderId: conversionClientOrderId(`${sweepRunId}-${bal.asset}`),
       });
-      await trace(db, 'info', 'sweep_converted', `${bal.free} ${bal.asset} -> ${sweepWallet.asset}`);
+      await trace(
+        db,
+        'info',
+        'sweep_converted',
+        `${bal.free} ${bal.asset} -> ${sweepWallet.asset}`,
+      );
     } catch (err) {
       await trace(db, 'warn', 'sweep_convert_skipped', String(err), { asset: bal.asset });
     }

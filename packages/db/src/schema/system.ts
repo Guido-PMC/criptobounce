@@ -1,4 +1,5 @@
 import { jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { mexAccounts } from './mex';
 import { users } from './users';
 
 export const systemSettings = pgTable('system_settings', {
@@ -20,12 +21,23 @@ export const workerLocks = pgTable('worker_locks', {
 
 export type WorkerLock = typeof workerLocks.$inferSelect;
 
+export const financialAccountLocks = pgTable('financial_account_locks', {
+  mexAccountId: uuid('mex_account_id')
+    .primaryKey()
+    .references(() => mexAccounts.id, { onDelete: 'cascade' }),
+  ownerType: text('owner_type').notNull(),
+  ownerId: text('owner_id').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Constant keys for system_settings */
 export const SystemSettingKeys = {
   MAINTENANCE_MODE: 'maintenance_mode',
   MINIMUM_AMOUNTS: 'minimum_amounts',
   ASSET_NETWORK_STATUS: 'asset_network_status',
   NETWORK_FEES: 'network_fees',
+  MANUAL_OPS_ADMIN_CHAT_ID: 'manual_ops_admin_chat_id',
 } as const;
 
 export interface MaintenanceModeValue {

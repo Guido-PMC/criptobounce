@@ -1,19 +1,21 @@
-import { config as loadDotEnv } from 'dotenv';
 import { resolve } from 'node:path';
+import { config as loadDotEnv } from 'dotenv';
 loadDotEnv({ path: resolve(process.cwd(), '../../.env') });
 loadDotEnv();
 
 import { loadWorkerEnv } from '@rb/config';
 import { createDb } from '@rb/db';
-import { logger } from './logger';
-import { startDepositWatcher } from './deposit-watcher';
-import { startBounceEngine } from './bounce-engine';
-import { startReconciliation } from './reconciliation';
-import { startSweepCron } from './sweep-cron';
-import { startRetentionCleanup } from './retention-cleanup';
 import { startBalanceSync } from './balance-sync';
+import { startBounceEngine } from './bounce-engine';
 import { startDepositAddressSync } from './deposit-address-sync';
+import { startDepositWatcher } from './deposit-watcher';
+import { logger } from './logger';
+import { startManualOperationEngine } from './manual-operation-engine';
+import { startManualOperationExpiry } from './manual-operation-expiry';
 import { startManualSweepDispatcher } from './manual-sweep';
+import { startReconciliation } from './reconciliation';
+import { startRetentionCleanup } from './retention-cleanup';
+import { startSweepCron } from './sweep-cron';
 
 const env = loadWorkerEnv();
 const db = createDb(env.DATABASE_URL, { max: 5 });
@@ -30,6 +32,8 @@ stoppers.push(startRetentionCleanup({ db, env }));
 stoppers.push(startBalanceSync({ db, env }));
 stoppers.push(startDepositAddressSync({ db, env }));
 stoppers.push(startManualSweepDispatcher({ db, env }));
+stoppers.push(startManualOperationExpiry({ db, env }));
+stoppers.push(startManualOperationEngine({ db, env }));
 
 logger.info('worker loops started');
 

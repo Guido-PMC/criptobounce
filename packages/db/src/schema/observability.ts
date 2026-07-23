@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './users';
@@ -93,10 +94,14 @@ export const telegramMessages = pgTable(
     rawPayload: jsonb('raw_payload'),
     sentOk: boolean('sent_ok'),
     error: text('error'),
+    dedupeKey: text('dedupe_key'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
     ts: timestamp('ts', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     pendingIdx: index('telegram_messages_pending_idx').on(t.direction, t.sentOk, t.ts),
+    dedupeUnique: uniqueIndex('telegram_messages_dedupe_uq').on(t.dedupeKey),
   }),
 );
 

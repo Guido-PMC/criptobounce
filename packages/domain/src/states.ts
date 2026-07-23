@@ -38,8 +38,34 @@ export const WITHDRAWAL_STATUSES = [
 ] as const;
 export type WithdrawalStatus = (typeof WITHDRAWAL_STATUSES)[number];
 
-export const WITHDRAWAL_TYPES = ['user_payout', 'platform_sweep', 'manual_sweep'] as const;
+export const WITHDRAWAL_TYPES = [
+  'user_payout',
+  'platform_sweep',
+  'manual_sweep',
+  'manual_operation_payout',
+  'manual_operation_refund',
+] as const;
 export type WithdrawalType = (typeof WITHDRAWAL_TYPES)[number];
+
+export const MANUAL_OPERATION_STATES = [
+  'awaiting_deposit',
+  'awaiting_deposit_confirmation',
+  'pending_user_confirm',
+  'pending_admin_confirm',
+  'pending_candidate_resolution',
+  'converting',
+  'awaiting_conversion',
+  'withdrawing',
+  'awaiting_withdrawal',
+  'refunding',
+  'awaiting_refund',
+  'on_hold',
+  'done',
+  'failed',
+  'expired',
+  'cancelled',
+] as const;
+export type ManualOperationState = (typeof MANUAL_OPERATION_STATES)[number];
 
 export const SWEEP_RUN_STATUSES = ['pending', 'running', 'done', 'failed'] as const;
 export type SweepRunStatus = (typeof SWEEP_RUN_STATUSES)[number];
@@ -55,6 +81,7 @@ export const OPERATION_TYPES = [
   'user_action',
   'reconciliation',
   'manual_sweep',
+  'manual_operation',
   'balance_sync',
   'deposit_address_sync',
   'deposit_poll',

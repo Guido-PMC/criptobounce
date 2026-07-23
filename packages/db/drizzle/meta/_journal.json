@@ -36,6 +36,20 @@
       "when": 1777829705698,
       "tag": "0004_add_receipt_calc_version",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784748901208,
+      "tag": "0005_modern_jane_foster",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784751204286,
+      "tag": "0006_clammy_stick",
+      "breakpoints": true
     }
   ]
 }

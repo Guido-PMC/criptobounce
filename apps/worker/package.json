@@ -17,6 +17,7 @@
     "@rb/db": "workspace:*",
     "@rb/domain": "workspace:*",
     "@rb/mex-client": "workspace:*",
+    "decimal.js": "^10.6.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.3",
     "node-cron": "^3.0.3",

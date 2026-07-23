@@ -1,21 +1,15 @@
-import { and, eq, isNull } from 'drizzle-orm';
-import type { Database } from '@rb/db';
+import { randomUUID } from 'node:crypto';
 import type { WorkerEnv } from '@rb/config';
+import type { Database } from '@rb/db';
+import { type Deposit, type MexAccount, bounceJobs, deposits, mexAccounts, users } from '@rb/db';
 import { ASSETS, mapMexToInternal } from '@rb/domain';
+import { userPayoutOrderId } from '@rb/domain';
+import { and, eq, isNull } from 'drizzle-orm';
+import { runWithCorrelation, trace } from './correlation';
 import { logger } from './logger';
 import { isMaintenanceActive } from './maintenance';
-import { runWithCorrelation, trace } from './correlation';
-import {
-  bounceJobs,
-  deposits,
-  mexAccounts,
-  users,
-  type Deposit,
-  type MexAccount,
-} from '@rb/db';
+import { tryMatchManualOperation } from './manual-operation-match';
 import { buildMexClient } from './mex-account';
-import { userPayoutOrderId } from '@rb/domain';
-import { randomUUID } from 'node:crypto';
 import { notify, tpl } from './notifier';
 
 interface Ctx {
@@ -70,16 +64,18 @@ async function runOnce(db: Database, env: WorkerEnv) {
     .from(mexAccounts)
     .innerJoin(users, eq(users.id, mexAccounts.userId))
     .where(
-      and(
-        eq(mexAccounts.status, 'active'),
-        eq(users.status, 'approved'),
-        isNull(users.deletedAt),
-      ),
+      and(eq(mexAccounts.status, 'active'), eq(users.status, 'approved'), isNull(users.deletedAt)),
     );
 
   for (const acc of accounts) {
     try {
-      await pollAccount(db, env, acc as unknown as MexAccount, acc.userIsPaused, acc.userPausedAssets);
+      await pollAccount(
+        db,
+        env,
+        acc as unknown as MexAccount,
+        acc.userIsPaused,
+        acc.userPausedAssets,
+      );
     } catch (err) {
       logger.warn({ err, mexAccountId: acc.id }, 'pollAccount failed');
     }
@@ -134,11 +130,13 @@ async function pollAccount(
   );
 }
 
-type MexDepositItem = Awaited<ReturnType<ReturnType<typeof buildMexClient>['getDepositHistory']>>[number];
+type MexDepositItem = Awaited<
+  ReturnType<ReturnType<typeof buildMexClient>['getDepositHistory']>
+>[number];
 
 async function processDeposit(
   db: Database,
-  env: WorkerEnv,
+  _env: WorkerEnv,
   acc: MexAccount,
   item: MexDepositItem,
   userIsPaused: boolean,
@@ -175,6 +173,7 @@ async function processDeposit(
           asset: mapped.asset,
           network: mapped.network,
           amount: item.amount,
+          amountRaw: item.amount,
           mexTxId: item.txId,
           onChainTx: item.txId,
           status: isConfirmed ? 'confirmed' : 'detected',
@@ -199,18 +198,33 @@ async function processDeposit(
         summary: `${item.amount} ${mapped.asset} ${mapped.network}`,
       },
       async () => {
-        await trace(db, 'info', 'detect_deposit', `${item.amount} ${mapped.asset} ${mapped.network}`, {
-          status: item.status,
-          mexCoin: item.coin,
-          mexNetwork: item.network,
-        });
+        await trace(
+          db,
+          'info',
+          'detect_deposit',
+          `${item.amount} ${mapped.asset} ${mapped.network}`,
+          {
+            status: item.status,
+            mexCoin: item.coin,
+            mexNetwork: item.network,
+          },
+        );
         await notify(db, {
           type: 'deposit_detected',
           userId: acc.userId,
           text: tpl.depositDetected(mapped.asset, mapped.network, item.amount),
         });
+        const manualMatch = await tryMatchManualOperation(
+          db,
+          acc.userId,
+          inserted!,
+          new Date(item.insertTime),
+          isConfirmed,
+        );
         if (isConfirmed) {
-          await maybeEnqueueBounce(db, acc.userId, inserted!, userIsPaused, userPausedAssets);
+          if (manualMatch.action === 'none') {
+            await maybeEnqueueBounce(db, acc.userId, inserted!, userIsPaused, userPausedAssets);
+          }
         }
       },
     );
@@ -221,7 +235,12 @@ async function processDeposit(
   if (existing.status === 'detected' && isConfirmed) {
     await db
       .update(deposits)
-      .set({ status: 'confirmed', confirmedAt: new Date(), updatedAt: new Date() })
+      .set({
+        status: 'confirmed',
+        amountRaw: item.amount,
+        confirmedAt: new Date(),
+        updatedAt: new Date(),
+      })
       .where(eq(deposits.id, existing.id));
 
     await runWithCorrelation(
@@ -240,15 +259,41 @@ async function processDeposit(
           userId: acc.userId,
           text: tpl.depositConfirmed(existing.asset, existing.network, existing.amount),
         });
-        await maybeEnqueueBounce(db, acc.userId, existing, userIsPaused, userPausedAssets);
+        const manualMatch = await tryMatchManualOperation(
+          db,
+          acc.userId,
+          { ...existing, amountRaw: item.amount },
+          new Date(item.insertTime),
+          true,
+        );
+        if (manualMatch.action === 'none') {
+          await maybeEnqueueBounce(db, acc.userId, existing, userIsPaused, userPausedAssets);
+        }
       },
     );
+    return;
+  }
+
+  // Re-run the manual matcher for already-confirmed rows. Besides making MEX
+  // polling idempotent, this recovers cleanly from a concurrent candidate
+  // selection race or a worker crash after confirming the deposit.
+  if (existing.status === 'confirmed' && isConfirmed) {
+    const manualMatch = await tryMatchManualOperation(
+      db,
+      acc.userId,
+      { ...existing, amountRaw: item.amount },
+      new Date(item.insertTime),
+      true,
+    );
+    if (manualMatch.action === 'none') {
+      await maybeEnqueueBounce(db, acc.userId, existing, userIsPaused, userPausedAssets);
+    }
   }
 }
 
 async function maybeEnqueueBounce(
   db: Database,
-  userId: string,
+  _userId: string,
   dep: Deposit,
   userIsPaused: boolean,
   userPausedAssets: string[],
@@ -280,4 +325,3 @@ async function maybeEnqueueBounce(
     logger.debug({ err, depositId: dep.id }, 'bounce_job already exists');
   }
 }
-

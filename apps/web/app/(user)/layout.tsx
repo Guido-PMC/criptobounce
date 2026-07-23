@@ -1,13 +1,16 @@
+import { auth, signOut } from '@/auth';
+import { NavLink } from '@/components/nav-link';
+import { OpenOperationBanner } from '@/components/open-operation-banner';
+import { Button } from '@/components/ui/button';
+import { getActiveManualOperationForUser } from '@/lib/user-manual-operations';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { auth, signOut } from '@/auth';
-import { Button } from '@/components/ui/button';
-import { NavLink } from '@/components/nav-link';
 
 export default async function UserLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect('/login');
   if (session.user.status !== 'approved') redirect('/login?error=NotApproved');
+  const activeOperation = await getActiveManualOperationForUser(session.user.id);
 
   return (
     <div className="min-h-screen flex bg-background">
@@ -21,6 +24,7 @@ export default async function UserLayout({ children }: { children: React.ReactNo
 
         <NavLink href="/dashboard" label="Dashboard" />
         <NavLink href="/receive" label="Recibir" />
+        <NavLink href="/operations" label="Operaciones" />
         <NavLink href="/wallets" label="Wallets de destino" />
         <NavLink href="/rules" label="Reglas de ruteo" />
         <NavLink href="/transactions" label="Transacciones" />
@@ -49,7 +53,10 @@ export default async function UserLayout({ children }: { children: React.ReactNo
           </Button>
         </form>
       </aside>
-      <main className="flex-1 p-6 overflow-auto animate-fade-in">{children}</main>
+      <main className="flex-1 p-6 overflow-auto animate-fade-in">
+        <OpenOperationBanner initialOperation={activeOperation} />
+        {children}
+      </main>
     </div>
   );
 }

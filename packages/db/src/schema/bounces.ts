@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   numeric,
@@ -9,6 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { manualOperations } from './manual-operations';
 import { mexAccounts } from './mex';
 import { users } from './users';
 import { destinationWallets } from './wallets';
@@ -26,6 +29,7 @@ export const deposits = pgTable(
     asset: text('asset').notNull(),
     network: text('network').notNull(),
     amount: numeric('amount', { precision: 20, scale: 8 }).notNull(),
+    amountRaw: text('amount_raw'),
     mexTxId: text('mex_tx_id').notNull(),
     onChainTx: text('on_chain_tx'),
     status: text('status').notNull().default('detected'),
@@ -42,6 +46,49 @@ export const deposits = pgTable(
 
 export type Deposit = typeof deposits.$inferSelect;
 export type NewDeposit = typeof deposits.$inferInsert;
+
+export const manualOperationDeposits = pgTable(
+  'manual_operation_deposits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    manualOperationId: uuid('manual_operation_id')
+      .notNull()
+      .references(() => manualOperations.id, { onDelete: 'cascade' }),
+    depositId: uuid('deposit_id')
+      .notNull()
+      .unique()
+      .references(() => deposits.id, { onDelete: 'restrict' }),
+    matchType: text('match_type').notNull(),
+    status: text('status').notNull().default('candidate'),
+    sourceAmountRaw: text('source_amount_raw').notNull(),
+    sourceInsertedAt: timestamp('source_inserted_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    selectedUnique: uniqueIndex('manual_op_one_selected_deposit')
+      .on(t.manualOperationId)
+      .where(sql`${t.status} = 'selected'`),
+    candidatesIdx: index('manual_op_deposit_candidates_idx').on(
+      t.manualOperationId,
+      t.status,
+      t.createdAt,
+    ),
+    matchTypeCheck: check(
+      'manual_op_deposits_match_type_check',
+      sql`${t.matchType} IN ('exact', 'mismatch')`,
+    ),
+    statusCheck: check(
+      'manual_op_deposits_status_check',
+      sql`${t.status} IN (
+        'candidate', 'selected', 'rejected', 'refunded', 'released_to_bounce'
+      )`,
+    ),
+  }),
+);
+
+export type ManualOperationDeposit = typeof manualOperationDeposits.$inferSelect;
+export type NewManualOperationDeposit = typeof manualOperationDeposits.$inferInsert;
 
 export const sweepRuns = pgTable('sweep_runs', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -118,6 +165,9 @@ export const withdrawals = pgTable(
     mexAccountId: uuid('mex_account_id').references(() => mexAccounts.id, { onDelete: 'set null' }),
     type: text('type').notNull(),
     bounceJobId: uuid('bounce_job_id').references(() => bounceJobs.id, { onDelete: 'set null' }),
+    manualOperationId: uuid('manual_operation_id').references(() => manualOperations.id, {
+      onDelete: 'set null',
+    }),
     sweepRunId: uuid('sweep_run_id').references(() => sweepRuns.id, { onDelete: 'set null' }),
     asset: text('asset').notNull(),
     network: text('network').notNull(),
@@ -138,6 +188,11 @@ export const withdrawals = pgTable(
     statusIdx: index('withdrawals_status_idx').on(t.status, t.createdAt),
     typeIdx: index('withdrawals_type_idx').on(t.type),
     bounceJobIdx: index('withdrawals_bounce_job_idx').on(t.bounceJobId),
+    manualOperationIdx: index('withdrawals_manual_operation_idx').on(
+      t.manualOperationId,
+      t.type,
+      t.status,
+    ),
   }),
 );
 

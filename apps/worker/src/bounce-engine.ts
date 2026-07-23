@@ -1,18 +1,20 @@
-import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
-import type { Database } from '@rb/db';
 import type { WorkerEnv } from '@rb/config';
-import { bounceJobs, deposits, mexAccounts, users, withdrawals, type BounceJob } from '@rb/db';
-import { calculateBounce, conversionClientOrderId, type Asset, type Network } from '@rb/domain';
+import type { Database } from '@rb/db';
+import { type BounceJob, bounceJobs, deposits, mexAccounts, users, withdrawals } from '@rb/db';
+import { type Asset, type Network, calculateBounce, conversionClientOrderId } from '@rb/domain';
 import { MexBusinessError } from '@rb/mex-client';
-import { logger } from './logger';
-import { isMaintenanceActive } from './maintenance';
+import { and, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import { runWithCorrelation, trace } from './correlation';
-import { buildMexClient } from './mex-account';
-import { resolveRoute } from './lib/routing';
+import {
+  claimFinancialAccountLease,
+  isFinancialAccountLocked,
+  releaseFinancialAccountLease,
+} from './financial-account-lock';
 import { getPlatformCommission, getUserCommission } from './lib/commissions';
-import { getLiveNetworkFee, getNetworkFee } from './lib/network-fees';
-import { getMinimumNet } from './lib/minimums';
 import { getCachedCapitalConfig, resolveMexNetwork } from './lib/mex-network-resolver';
+import { getMinimumNet } from './lib/minimums';
+import { getLiveNetworkFee, getNetworkFee } from './lib/network-fees';
+import { resolveRoute } from './lib/routing';
 import {
   baseQuantityDecimals,
   getSpotSymbolInfo,
@@ -20,11 +22,20 @@ import {
   symbolMinNotional,
   truncateToDecimals,
 } from './lib/spot-precision';
+import { logger } from './logger';
+import { isMaintenanceActive } from './maintenance';
+import { buildMexClient } from './mex-account';
 import { notify, tpl } from './notifier';
 
 const LEASE_TIMEOUT_MS = 5 * 60_000;
 const MAX_RETRIES = 5;
-const PROCESSABLE_STATES = ['pending', 'converting', 'awaiting_conversion', 'withdrawing', 'awaiting_withdrawal'] as const;
+const PROCESSABLE_STATES = [
+  'pending',
+  'converting',
+  'awaiting_conversion',
+  'withdrawing',
+  'awaiting_withdrawal',
+] as const;
 
 interface Ctx {
   db: Database;
@@ -65,7 +76,10 @@ async function processBatch(db: Database, env: WorkerEnv) {
     try {
       await processJob(db, env, job);
     } catch (err) {
-      logger.error({ err, jobId: job.id, jobState: job.state, jobSnapshot: job }, 'processJob failed');
+      logger.error(
+        { err, jobId: job.id, jobState: job.state, jobSnapshot: job },
+        'processJob failed',
+      );
     } finally {
       // Always release the lease after the iteration. State machine handlers
       // already updated bounce_jobs.state; we just need to free the worker
@@ -180,6 +194,13 @@ async function processJob(db: Database, env: WorkerEnv, job: BounceJob) {
       .where(eq(bounceJobs.id, job.id));
     return;
   }
+  if (await isFinancialAccountLocked(db, dep.mexAccountId)) {
+    logger.info(
+      { jobId: job.id, mexAccountId: dep.mexAccountId },
+      'bounce deferred: manual operation holds financial account lock',
+    );
+    return;
+  }
 
   const mex = await db.query.mexAccounts.findFirst({
     where: eq(mexAccounts.id, dep.mexAccountId),
@@ -192,37 +213,47 @@ async function processJob(db: Database, env: WorkerEnv, job: BounceJob) {
     return;
   }
 
-  await runWithCorrelation(
-    db,
-    {
-      type: 'deposit_bounce',
-      userId: dep.userId,
-      entityType: 'bounce_job',
-      entityId: job.id,
-      summary: `state=${job.state}`,
-    },
-    async () => {
-      switch (job.state) {
-        case 'pending':
-          await handlePending(db, env, job, dep, mex);
-          break;
-        case 'withdrawing':
-          await handleWithdrawing(db, env, job, dep, mex);
-          break;
-        case 'awaiting_withdrawal':
-          await handleAwaitingWithdrawal(db, env, job, dep, mex);
-          break;
-        case 'converting':
-          await handleConverting(db, env, job, dep, mex);
-          break;
-        case 'awaiting_conversion':
-          await handleAwaitingConversion(db, env, job, dep, mex);
-          break;
-        default:
-          await trace(db, 'warn', 'unexpected_state', `state ${job.state}`);
-      }
-    },
-  );
+  const leaseOwner = `bounce:${job.id}`;
+  if (
+    !(await claimFinancialAccountLease(db, dep.mexAccountId, 'bounce', leaseOwner, 30 * 60_000))
+  ) {
+    return;
+  }
+  try {
+    await runWithCorrelation(
+      db,
+      {
+        type: 'deposit_bounce',
+        userId: dep.userId,
+        entityType: 'bounce_job',
+        entityId: job.id,
+        summary: `state=${job.state}`,
+      },
+      async () => {
+        switch (job.state) {
+          case 'pending':
+            await handlePending(db, env, job, dep, mex);
+            break;
+          case 'withdrawing':
+            await handleWithdrawing(db, env, job, dep, mex);
+            break;
+          case 'awaiting_withdrawal':
+            await handleAwaitingWithdrawal(db, env, job, dep, mex);
+            break;
+          case 'converting':
+            await handleConverting(db, env, job, dep, mex);
+            break;
+          case 'awaiting_conversion':
+            await handleAwaitingConversion(db, env, job, dep, mex);
+            break;
+          default:
+            await trace(db, 'warn', 'unexpected_state', `state ${job.state}`);
+        }
+      },
+    );
+  } finally {
+    await releaseFinancialAccountLease(db, dep.mexAccountId, leaseOwner);
+  }
 }
 
 async function handlePending(
@@ -273,13 +304,7 @@ async function handlePending(
   const userComm = await getUserCommission(db, dep.userId, dep.asset);
   const platformComm = await getPlatformCommission(db, dep.asset);
   const sameAssetClient = buildMexClient(db, env, mex);
-  const netFee = await getLiveNetworkFee(
-    db,
-    sameAssetClient,
-    mex.id,
-    dep.asset,
-    dep.network,
-  );
+  const netFee = await getLiveNetworkFee(db, sameAssetClient, mex.id, dep.asset, dep.network);
   const minOut = await getMinimumNet(db, dep.asset);
 
   const calc = calculateBounce({
@@ -388,9 +413,15 @@ async function handleWithdrawing(
     mexCoin = resolved.coin;
     mexNetwork = resolved.network;
     liveFee = resolved.withdrawFee;
-    await trace(db, 'info', 'mex_network_resolved', `${w.asset}/${w.network} -> ${mexCoin}/${mexNetwork}`, {
-      withdrawFee: liveFee,
-    });
+    await trace(
+      db,
+      'info',
+      'mex_network_resolved',
+      `${w.asset}/${w.network} -> ${mexCoin}/${mexNetwork}`,
+      {
+        withdrawFee: liveFee,
+      },
+    );
   } catch (err) {
     await trace(db, 'warn', 'capital_config_failed_for_withdraw', String(err));
     // Fall back to internal identifiers; MEX will reject if they don't match,
@@ -398,10 +429,7 @@ async function handleWithdrawing(
   }
 
   // The fee MEX is about to charge. Prefer live → seeded → hardcoded.
-  const feeForGrossUp =
-    liveFee !== null
-      ? liveFee
-      : await getNetworkFee(db, w.asset, w.network);
+  const feeForGrossUp = liveFee !== null ? liveFee : await getNetworkFee(db, w.asset, w.network);
 
   // GROSS UP THE SUBMISSION SO THE WALLET RECEIVES `userAmountNet` EXACTLY.
   //
@@ -593,10 +621,7 @@ async function applyWithdrawStatus(
           ...(snapshotSpread !== null ? { receiptSpreadPercent: snapshotSpread } : {}),
         })
         .where(eq(bounceJobs.id, job.id));
-      await tx
-        .update(deposits)
-        .set({ status: 'bounced' })
-        .where(eq(deposits.id, dep.id));
+      await tx.update(deposits).set({ status: 'bounced' }).where(eq(deposits.id, dep.id));
     });
     await notify(db, {
       type: 'bounce_done',
@@ -904,10 +929,16 @@ async function handleAwaitingConversion(
   const quoteQty = Number(order.cummulativeQuoteQty ?? '0');
   const amountAfterConv = side === 'SELL' ? quoteQty : executedQty;
   if (!Number.isFinite(amountAfterConv) || amountAfterConv <= 0) {
-    await trace(db, 'warn', 'conversion_no_fill_data', 'order is FILLED but fill quantities are 0', {
-      executedQty: order.executedQty,
-      cummulativeQuoteQty: order.cummulativeQuoteQty,
-    });
+    await trace(
+      db,
+      'warn',
+      'conversion_no_fill_data',
+      'order is FILLED but fill quantities are 0',
+      {
+        executedQty: order.executedQty,
+        cummulativeQuoteQty: order.cummulativeQuoteQty,
+      },
+    );
     return;
   }
   const grossIn = Number(dep.amount);
@@ -915,7 +946,10 @@ async function handleAwaitingConversion(
   // Expected (from sell): we don't have a guaranteed reference; use the average
   // implied by the order itself. If avg fill price is way off historic, MEX
   // would reject, so we mostly check sanity.
-  const avgPrice = side === 'SELL' ? amountAfterConv / Math.max(grossIn, 1e-12) : grossIn / Math.max(amountAfterConv, 1e-12);
+  const avgPrice =
+    side === 'SELL'
+      ? amountAfterConv / Math.max(grossIn, 1e-12)
+      : grossIn / Math.max(amountAfterConv, 1e-12);
   await trace(db, 'info', 'conversion_filled', 'market order filled', {
     executedQty: order.executedQty,
     cummulativeQuoteQty: order.cummulativeQuoteQty,

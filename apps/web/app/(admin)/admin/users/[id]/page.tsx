@@ -1,8 +1,4 @@
-import Link from 'next/link';
-import { eq, and, desc, isNull } from 'drizzle-orm';
-import { notFound } from 'next/navigation';
-import { db } from '@/lib/db';
-import { destinationWallets, mexAccounts, mexApiCalls, operations, userCommissions, users } from '@rb/db';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -12,11 +8,23 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { db } from '@/lib/db';
 import { formatDate, formatNumber } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
-import { ApproveForm } from './approve-form';
+import {
+  destinationWallets,
+  mexAccounts,
+  mexApiCalls,
+  operations,
+  userCommissions,
+  users,
+} from '@rb/db';
+import { and, desc, eq, isNull } from 'drizzle-orm';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { AdminUserActions } from './admin-actions';
+import { ApproveForm } from './approve-form';
 import { CommissionEditor } from './commission-editor';
+import { ManualOperationDialog } from './manual-operation-dialog';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +38,16 @@ export default async function AdminUserDetailPage({
   if (!user) notFound();
 
   const mex = await db.query.mexAccounts.findFirst({ where: eq(mexAccounts.userId, id) });
+  const wallets = await db
+    .select({
+      id: destinationWallets.id,
+      label: destinationWallets.label,
+      asset: destinationWallets.asset,
+      network: destinationWallets.network,
+      address: destinationWallets.address,
+    })
+    .from(destinationWallets)
+    .where(and(eq(destinationWallets.userId, id), isNull(destinationWallets.deletedAt)));
 
   // Latest operations for this user (any type)
   const ops = await db
@@ -71,9 +89,24 @@ export default async function AdminUserDetailPage({
     <div className="space-y-6 max-w-3xl">
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-semibold">{user.telegramUsername ?? 'usuario'}</h1>
-        <Badge variant={user.status === 'approved' ? 'success' : user.status === 'pending' ? 'warning' : 'destructive'}>
+        <Badge
+          variant={
+            user.status === 'approved'
+              ? 'success'
+              : user.status === 'pending'
+                ? 'warning'
+                : 'destructive'
+          }
+        >
           {user.status}
         </Badge>
+        <div className="ml-auto">
+          <ManualOperationDialog
+            userId={user.id}
+            wallets={wallets}
+            disabled={user.status !== 'approved' || mex?.status !== 'active'}
+          />
+        </div>
       </div>
 
       <Card>
@@ -185,9 +218,7 @@ export default async function AdminUserDetailPage({
                             {o.status}
                           </Badge>
                           {o.failedAtStep ? (
-                            <span className="ml-2 text-xs text-destructive">
-                              {o.failedAtStep}
-                            </span>
+                            <span className="ml-2 text-xs text-destructive">{o.failedAtStep}</span>
                           ) : null}
                         </TableCell>
                         <TableCell className="text-xs">{o.summary ?? '-'}</TableCell>

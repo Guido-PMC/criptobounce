@@ -20,3 +20,21 @@ export function manualSweepOrderId(actionId: string): string {
 export function conversionClientOrderId(bounceJobId: string): string {
   return `rb-conv-${bounceJobId.replace(/-/g, '').slice(0, 22)}`;
 }
+
+function manualOperationId(prefix: 'mc' | 'mp' | 'mr', operationId: string, attempt = 0): string {
+  const suffix = attempt > 0 ? `-r${attempt}` : '';
+  const compact = operationId.replace(/-/g, '');
+  return `${prefix}-${compact.slice(0, 29 - suffix.length)}${suffix}`;
+}
+
+export function manualOperationConversionOrderId(operationId: string): string {
+  return manualOperationId('mc', operationId);
+}
+
+export function manualOperationPayoutOrderId(operationId: string, attempt = 0): string {
+  return manualOperationId('mp', operationId, attempt);
+}
+
+export function manualOperationRefundOrderId(operationId: string, attempt = 0): string {
+  return manualOperationId('mr', operationId, attempt);
+}

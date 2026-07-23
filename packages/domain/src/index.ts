@@ -6,3 +6,5 @@ export * from './address-validation';
 export * from './errors';
 export * from './pricing';
 export * from './receipt';
+export * from './manual-operation';
+export * from './spot-pairs';

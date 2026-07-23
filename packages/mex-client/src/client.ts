@@ -15,9 +15,11 @@ import {
   type MexOrderResponse,
   MexOrderResponseSchema,
   type MexSymbolInfo,
+  type MexTrade,
+  MexTradeSchema,
   type MexWithdraw,
-  MexWithdrawApplyResponseSchema,
   type MexWithdrawApplyResponse,
+  MexWithdrawApplyResponseSchema,
   MexWithdrawSchema,
 } from './types';
 
@@ -27,12 +29,12 @@ export interface MexClientOptions {
   host?: string;
   tracer?: MexTracer;
   recvWindow?: number;
+  requestTimeoutMs?: number;
   /** Skip the actual HTTP call for write endpoints; for DRY_RUN. */
   dryRun?: boolean;
 }
 
 const WRITE_METHODS = new Set(['POST', 'DELETE', 'PUT', 'PATCH']);
-const PRIVATE_PREFIX = '/api/v3';
 
 export interface WithdrawArgs {
   coin: string;
@@ -61,6 +63,7 @@ export class MexClient {
   private readonly tracer: MexTracer;
   private readonly recvWindow: number;
   private readonly dryRun: boolean;
+  private readonly requestTimeoutMs: number;
 
   constructor(opts: MexClientOptions) {
     this.apiKey = opts.apiKey;
@@ -69,6 +72,7 @@ export class MexClient {
     this.tracer = opts.tracer ?? NoopTracer;
     this.recvWindow = opts.recvWindow ?? 5000;
     this.dryRun = opts.dryRun ?? false;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
   }
 
   // === Public ===
@@ -105,8 +109,7 @@ export class MexClient {
     }
     const result = MexExchangeInfoSchema.safeParse(parsed);
     if (!result.success) return null;
-    const match = result.data.symbols.find((s) => s.symbol === symbol);
-    return match ?? result.data.symbols[0] ?? null;
+    return result.data.symbols.find((s) => s.symbol === symbol) ?? null;
   }
 
   // === Private ===
@@ -117,7 +120,13 @@ export class MexClient {
   }
 
   async getDepositHistory(
-    args: { coin?: string; status?: number; startTime?: number; endTime?: number; limit?: number } = {},
+    args: {
+      coin?: string;
+      status?: number;
+      startTime?: number;
+      endTime?: number;
+      limit?: number;
+    } = {},
   ): Promise<MexDeposit[]> {
     const json = await this.signedJson('GET', '/api/v3/capital/deposit/hisrec', args);
     return z.array(MexDepositSchema).parse(json);
@@ -168,9 +177,23 @@ export class MexClient {
     return MexOrderResponseSchema.parse(json);
   }
 
-  async queryOrder(args: { symbol: string; orderId?: string; origClientOrderId?: string }): Promise<MexOrderResponse> {
+  async queryOrder(args: {
+    symbol: string;
+    orderId?: string;
+    origClientOrderId?: string;
+  }): Promise<MexOrderResponse> {
     const json = await this.signedJson('GET', '/api/v3/order', args);
     return MexOrderResponseSchema.parse(json);
+  }
+
+  async getMyTrades(args: {
+    symbol: string;
+    orderId?: string;
+    limit?: number;
+    fromId?: string;
+  }): Promise<MexTrade[]> {
+    const json = await this.signedJson('GET', '/api/v3/myTrades', args);
+    return z.array(MexTradeSchema).parse(json);
   }
 
   /**
@@ -178,7 +201,10 @@ export class MexClient {
    * Returns null when MEXC has not generated an address yet for the pair
    * (call generateDepositAddress first in that case).
    */
-  async getDepositAddress(args: { coin: string; network: string }): Promise<MexDepositAddress | null> {
+  async getDepositAddress(args: {
+    coin: string;
+    network: string;
+  }): Promise<MexDepositAddress | null> {
     try {
       const json = await this.signedJson('GET', '/api/v3/capital/deposit/address', {
         coin: args.coin,
@@ -199,7 +225,10 @@ export class MexClient {
    * Generates a fresh deposit address on MEXC for (coin, network).
    * In dryRun mode this returns { address: null } without hitting the wire.
    */
-  async generateDepositAddress(args: { coin: string; network: string }): Promise<{ address: string | null; memo: string | null }> {
+  async generateDepositAddress(args: { coin: string; network: string }): Promise<{
+    address: string | null;
+    memo: string | null;
+  }> {
     const json = await this.signedJson('POST', '/api/v3/capital/deposit/address', {
       coin: args.coin,
       network: args.network,
@@ -220,7 +249,10 @@ export class MexClient {
   private async publicRequest(method: string, path: string): Promise<Response> {
     const url = `${this.host}${path}`;
     try {
-      const res = await fetch(url, { method });
+      const res = await fetch(url, {
+        method,
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
       return res;
     } catch (err) {
       throw new MexNetworkError(`network error on ${method} ${path}`, err);
@@ -260,7 +292,11 @@ export class MexClient {
     const t0 = Date.now();
     let res: Response;
     try {
-      res = await fetch(url, { method, headers });
+      res = await fetch(url, {
+        method,
+        headers,
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
     } catch (err) {
       const elapsed = Date.now() - t0;
       await this.safeLog({
